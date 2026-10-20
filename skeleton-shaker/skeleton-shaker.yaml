@@ -1,0 +1,270 @@
+esphome:
+  name: skeleton-shaker
+  friendly_name: Skeleton Shaker
+  includes:
+    - shaker.h
+  on_boot:
+    priority: 800
+    then:
+      - script.execute: motor_coast
+
+esp32:
+  board: esp32dev
+
+logger:
+  baud_rate: 115200
+
+# The prop must work with no network, so nothing here is allowed to reboot the board when Wi-Fi or
+# Home Assistant is missing (both default to rebooting after 15 min).
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  reboot_timeout: 0s
+  ap:
+    ssid: Skeleton-Shaker
+    password: !secret ap_password
+
+captive_portal:
+
+api:
+  encryption:
+    key: !secret api_key
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome
+    encryption:
+      key: !secret api_key
+
+web_server:
+  port: 80
+  ota: false
+  auth:
+    type: digest
+    username: admin
+    password: !secret web_password
+
+.tuning: &tuning
+  platform: template
+  optimistic: true
+  restore_value: true
+  entity_category: config
+  mode: box
+
+globals:
+  - id: dance_started_at
+    type: uint32_t
+  - id: dance_length_ms
+    type: uint32_t
+  - id: burst_on_ms
+    type: uint32_t
+  - id: burst_pause_ms
+    type: uint32_t
+  - id: cooldown_ms
+    type: uint32_t
+
+output:
+  - platform: gpio
+    id: in1
+    pin: GPIO25
+  - platform: gpio
+    id: in2
+    pin: GPIO26
+  - platform: ledc
+    id: ena
+    pin: GPIO27
+    frequency: 2000Hz
+
+binary_sensor:
+  - platform: gpio
+    id: mat
+    name: Pressure mat
+    pin:
+      number: GPIO33
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    filters:
+      - delayed_on: 50ms
+      - delayed_off: 50ms
+    on_press:
+      - if:
+          condition:
+            and:
+              - switch.is_on: armed
+              - not:
+                  script.is_running: dance
+          then:
+            - script.execute: dance
+          else:
+            - logger.log:
+                level: INFO
+                format: "Step ignored (disarmed, dancing, or cooling down)"
+
+switch:
+  - platform: template
+    id: armed
+    name: Armed
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+
+button:
+  - platform: template
+    name: Test dance
+    on_press:
+      - script.execute: dance
+  - platform: template
+    name: Stop
+    on_press:
+      - script.stop: dance
+      - script.execute: motor_coast
+      - text_sensor.template.publish:
+          id: shaker_state
+          state: idle
+
+text_sensor:
+  - platform: template
+    id: shaker_state
+    name: State
+
+number:
+  - <<: *tuning
+    id: dance_min_s
+    name: Dance min
+    unit_of_measurement: s
+    min_value: 1
+    max_value: 30
+    step: 0.5
+    initial_value: 6
+  - <<: *tuning
+    id: dance_max_s
+    name: Dance max
+    unit_of_measurement: s
+    min_value: 1
+    max_value: 30
+    step: 0.5
+    initial_value: 10
+  - <<: *tuning
+    id: burst_min_ms
+    name: Burst min
+    unit_of_measurement: ms
+    min_value: 50
+    max_value: 2000
+    step: 10
+    initial_value: 150
+  - <<: *tuning
+    id: burst_max_ms
+    name: Burst max
+    unit_of_measurement: ms
+    min_value: 50
+    max_value: 2000
+    step: 10
+    initial_value: 500
+  - <<: *tuning
+    id: pause_min_ms
+    name: Pause min
+    unit_of_measurement: ms
+    min_value: 0
+    max_value: 1000
+    step: 10
+    initial_value: 50
+  - <<: *tuning
+    id: pause_max_ms
+    name: Pause max
+    unit_of_measurement: ms
+    min_value: 0
+    max_value: 1000
+    step: 10
+    initial_value: 200
+  - <<: *tuning
+    id: duty_min_pct
+    name: Duty min
+    unit_of_measurement: "%"
+    min_value: 20
+    max_value: 100
+    step: 1
+    initial_value: 50
+  - <<: *tuning
+    id: duty_max_pct
+    name: Duty max
+    unit_of_measurement: "%"
+    min_value: 20
+    max_value: 100
+    step: 1
+    initial_value: 100
+  - <<: *tuning
+    id: cooldown_min_s
+    name: Cooldown min
+    unit_of_measurement: s
+    min_value: 0
+    max_value: 60
+    step: 0.5
+    initial_value: 3
+  - <<: *tuning
+    id: cooldown_max_s
+    name: Cooldown max
+    unit_of_measurement: s
+    min_value: 0
+    max_value: 60
+    step: 0.5
+    initial_value: 5
+
+script:
+  # On the L298N, IN1 == IN2 with ENA high is a hard brake; dropping ENA to 0 is what actually coasts.
+  - id: motor_coast
+    then:
+      - output.set_level:
+          id: ena
+          level: 0
+      - output.turn_off: in1
+      - output.turn_off: in2
+
+  # mode: single plus the cooldown living inside the script is what makes the mat ignore steps
+  # during the dance and the cooldown: script.is_running covers both.
+  - id: dance
+    mode: single
+    then:
+      - lambda: |-
+          id(dance_started_at) = millis();
+          id(dance_length_ms) = shaker::pick_in_range(
+              uint32_t(id(dance_min_s).state * 1000), uint32_t(id(dance_max_s).state * 1000), random_uint32());
+          ESP_LOGI("shaker", "Step! Dancing for %" PRIu32 " ms", id(dance_length_ms));
+      - text_sensor.template.publish:
+          id: shaker_state
+          state: dancing
+      - while:
+          condition:
+            lambda: return !shaker::elapsed(millis(), id(dance_started_at), id(dance_length_ms));
+          then:
+            - lambda: |-
+                auto burst = shaker::plan_burst(
+                    {uint32_t(id(burst_min_ms).state), uint32_t(id(burst_max_ms).state)},
+                    {uint32_t(id(pause_min_ms).state), uint32_t(id(pause_max_ms).state)},
+                    {uint32_t(id(duty_min_pct).state), uint32_t(id(duty_max_pct).state)},
+                    [] { return random_uint32(); });
+                id(in1).set_state(burst.forward);
+                id(in2).set_state(!burst.forward);
+                id(ena).set_level(burst.duty);
+                id(burst_on_ms) = burst.on_ms;
+                id(burst_pause_ms) = burst.pause_ms;
+                ESP_LOGD("shaker", "Burst %s %.0f%% for %" PRIu32 " ms, pause %" PRIu32 " ms", burst.forward ? "fwd" : "rev",
+                         burst.duty * 100, burst.on_ms, burst.pause_ms);
+            - delay: !lambda return id(burst_on_ms);
+            - script.execute: motor_coast
+            - delay: !lambda return id(burst_pause_ms);
+      - script.execute: motor_coast
+      - lambda: |-
+          id(cooldown_ms) = shaker::pick_in_range(
+              uint32_t(id(cooldown_min_s).state * 1000), uint32_t(id(cooldown_max_s).state * 1000), random_uint32());
+          ESP_LOGI("shaker", "Dance done, cooling down for %" PRIu32 " ms", id(cooldown_ms));
+      - text_sensor.template.publish:
+          id: shaker_state
+          state: cooldown
+      - delay: !lambda return id(cooldown_ms);
+      - logger.log:
+          level: INFO
+          format: "Ready for the next victim"
+      - text_sensor.template.publish:
+          id: shaker_state
+          state: idle
