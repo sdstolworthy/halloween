@@ -1,0 +1,11 @@
+/target
+firmware/target
+firmware/.embuild
+# esp-idf-sys regenerates these per build with machine-specific absolute paths.
+firmware/components_*.lock
+firmware/dependencies.lock
+# Real Wi-Fi/MQTT credentials, baked in at build time. Never commit.
+firmware/provision.toml
+# Built by build-wasm.sh / the Dockerfile; never committed.
+eyes-web/web/eyes_web.wasm
+eyes-emulator/out/
