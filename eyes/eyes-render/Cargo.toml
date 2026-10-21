@@ -1,0 +1,10 @@
+[package]
+name = "eyes-render"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+embedded-graphics.workspace = true
+eyes-core = { path = "../eyes-core" }
+libm.workspace = true

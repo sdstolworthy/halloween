@@ -1,0 +1,11 @@
+[package]
+name = "eyes-emulator"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "Renders a walk-up contact sheet PNG with the real state machine and renderer"
+
+[dependencies]
+embedded-graphics.workspace = true
+eyes-core = { path = "../eyes-core" }
+eyes-render = { path = "../eyes-render" }
