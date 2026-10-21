@@ -181,6 +181,10 @@ When the house switches into scare mode, the eyes turn evil: black sclera, red p
     mid-move, because it's a deliberate event, not a routine blink.
   - At very low frame rates (the emulator below ~20 fps) the shut hold could fall between frames; the
     switch frame is then drawn shut rather than ever showing the new palette with the lids open.
+  - "Shut" means no lit pixels whatever the squint or brow: the squint's outer-corner lift fades out as
+    the blink closes (scaled by the blink alone, so open squinting eyes keep their shape).
+  - If the blink carrying a switch is retimed (a visitor is acquired mid-blink), the switch rides on
+    with it rather than waiting for a second blink, and no double blink follows a switch.
 - **Brow:** eases in rather than snapping. It starts growing at the moment of the switch with a 0.2 s
   time constant, so it is about half formed as the lid finishes reopening and complete within ~0.6 s:
   the scowl forms as the eye opens. Having it fully formed as the lid opens would mean changing the lid

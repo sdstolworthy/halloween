@@ -14,6 +14,17 @@ pixels the panel will. Design and contracts: [the tracking eyes spec](../docs/sp
 | `firmware/` | ESP-IDF firmware; its own Cargo workspace. |
 | `Dockerfile` | Builds the emulator site for Coolify (base directory `/eyes`). |
 
+## Before pushing
+
+```bash
+./scripts/check.sh
+```
+
+Runs host fmt, clippy (including the wasm target) and tests, the wasm build and smoke test, and, if the ESP
+toolchain is installed, the firmware fmt, clippy and `cargo +esp build --release`. Run the firmware build
+even when the host checks pass: the Xtensa compiler has crashed on code they accepted (a float
+`if … { 1.0 } else { 0.0 }` select, now written as arithmetic in the hot path).
+
 ## Host workspace
 
 `rust-toolchain.toml` pins Rust 1.96.0 with rustfmt, Clippy and the wasm target.
