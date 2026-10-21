@@ -4,8 +4,11 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-// Keep in sync with scripted_run_matches_the_smoke_test_hash in eyes-web/src/lib.rs.
-const SCRIPTED_HASH = 0xf99b39d7;
+// Keep in sync with scripted_runs_match_the_smoke_test_hashes in eyes-web/src/lib.rs: one frame mid-way
+// through the coupled acquisition blink (pins blink timing), one settled.
+const MID_BLINK_MS = 297;
+const MID_BLINK_HASH = 0x2f020ba7;
+const SETTLED_HASH = 0xf99b39d7;
 
 const dir = dirname(fileURLToPath(import.meta.url));
 const wasmPath = process.argv[2] ?? join(dir, "eyes_web.wasm");
@@ -35,16 +38,24 @@ check(wasm.width() === 128 && wasm.height() === 64, "panel is not 128x64");
 check(wasm.framebuffer_len() === 128 * 64 * 4, "framebuffer is not 128x64 RGBA");
 
 // Same script as the host test: seed 1, visitor at 1.2 m every 100 ms, frames every 33 ms for 3 s.
+const frameHash = () => {
+  const frame = new Uint8Array(wasm.memory.buffer, wasm.framebuffer_ptr(), wasm.framebuffer_len());
+  let hash = 0x811c9dc5;
+  for (const byte of frame) hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
+  return hash;
+};
+let midBlinkHash = null;
 wasm.reset(1, 0);
 for (let now = 0; now < 3000;) {
   if (now % 100 < 33) wasm.sensor_reading(1.2, now);
   now += 33;
   wasm.frame(now);
+  if (now === MID_BLINK_MS) midBlinkHash = frameHash();
 }
-const frame = new Uint8Array(wasm.memory.buffer, wasm.framebuffer_ptr(), wasm.framebuffer_len());
-let hash = 0x811c9dc5;
-for (const byte of frame) hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
-check(hash === SCRIPTED_HASH, `scripted frame hash 0x${hash.toString(16)} != 0x${SCRIPTED_HASH.toString(16)}`);
+const settledHash = frameHash();
+const hex = (value) => `0x${(value ?? 0).toString(16)}`;
+check(midBlinkHash === MID_BLINK_HASH, `mid-blink frame hash ${hex(midBlinkHash)} != ${hex(MID_BLINK_HASH)}`);
+check(settledHash === SETTLED_HASH, `settled frame hash ${hex(settledHash)} != ${hex(SETTLED_HASH)}`);
 check(wasm.mode() === 1, "scripted run should be tracking");
 
 wasm.sensor_reading(NaN, 3100);
@@ -69,4 +80,4 @@ if (failures.length) {
   failures.forEach((failure) => console.error(`FAIL: ${failure}`));
   process.exit(1);
 }
-console.log(`PASS: ${required.length} exports, ${keys.length} params, scripted frame hash 0x${hash.toString(16)} matches host`);
+console.log(`PASS: ${required.length} exports, ${keys.length} params, scripted frame hashes match host (mid-blink and settled)`);

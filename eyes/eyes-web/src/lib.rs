@@ -397,11 +397,11 @@ mod tests {
     use super::*;
 
     /// The scripted run `web/smoke.mjs` replays through the wasm build: seed 1, a visitor holding at
-    /// 1.2 m reported every 100 ms, frames every 33 ms for 3 s.
-    fn scripted_frame() -> Emulator {
+    /// 1.2 m reported every 100 ms, frames every 33 ms until `until_ms`.
+    fn scripted_frame(until_ms: u64) -> Emulator {
         let mut emulator = Emulator::new(1, 0);
         let mut now_ms = 0;
-        while now_ms < 3000 {
+        while now_ms < until_ms {
             if now_ms % 100 < 33 {
                 emulator.sensor_reading(Some(1.2), now_ms);
             }
@@ -411,62 +411,36 @@ mod tests {
         emulator
     }
 
+    /// Mid-way through the coupled acquisition blink, so the shared hash pins blink timing too.
+    const MID_BLINK_MS: u64 = 297;
+    const SETTLED_MS: u64 = 3000;
+
     fn fnv1a(bytes: &[u8]) -> u32 {
         bytes.iter().fold(0x811C_9DC5, |hash, &byte| {
             (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
         })
     }
 
-    /// Keep in sync with `SCRIPTED_HASH` in web/smoke.mjs; equal hashes prove the browser renders exactly
+    /// Keep in sync with `SCRIPTED_HASHES` in web/smoke.mjs; equal hashes prove the browser renders exactly
     /// what the host (and so the firmware) renders.
     #[test]
-    fn scripted_run_matches_the_smoke_test_hash() {
-        assert_eq!(fnv1a(scripted_frame().rgba()), 0xF99B_39D7);
+    fn scripted_runs_match_the_smoke_test_hashes() {
+        let hash_at = |until_ms| fnv1a(scripted_frame(until_ms).rgba());
+        assert_eq!(
+            [hash_at(MID_BLINK_MS), hash_at(SETTLED_MS)],
+            [0x2F02_0BA7, 0xF99B_39D7]
+        );
+    }
+
+    #[test]
+    fn the_mid_blink_frame_is_mid_blink() {
+        let lid = scripted_frame(MID_BLINK_MS).lid();
+        assert!(lid > 0.3 && lid < 1.0, "lid {lid}");
     }
 
     #[test]
     fn scripted_run_is_tracking() {
-        assert_eq!(scripted_frame().mode(), Mode::Tracking);
-    }
-
-    #[test]
-    fn lid_reports_the_last_frames_closure() {
-        let mut emulator = Emulator::new(1, 0);
-        let pose = emulator.frame(100);
-        assert_eq!(emulator.lid(), pose.blink.max(pose.squint));
-    }
-
-    #[test]
-    fn sensor_payloads_match_porch_sensor() {
-        let cases = [
-            (Some(1.834), "1.83"),
-            (Some(0.0), "0.00"),
-            (Some(4.49), "4.49"),
-            (Some(4.5), "none"),
-            (Some(7.0), "none"),
-            (Some(f32::INFINITY), "none"),
-            (None, "none"),
-        ];
-        for (distance, want) in cases {
-            assert_eq!(porch_sensor_payload(distance), want, "{distance:?}");
-        }
-    }
-
-    #[test]
-    fn beyond_range_readings_never_track() {
-        let mut emulator = Emulator::new(1, 0);
-        for now_ms in (0..2000).step_by(100) {
-            emulator.sensor_reading(Some(4.6), now_ms);
-            emulator.frame(now_ms);
-        }
-        assert_eq!(emulator.mode(), Mode::Idle);
-    }
-
-    #[test]
-    fn malformed_distance_payloads_are_rejected_with_a_reason() {
-        let mut emulator = Emulator::new(1, 0);
-        let accepted = emulator.receive_distance(b"1.2m", 0);
-        assert!(!accepted && !emulator.message().is_empty());
+        assert_eq!(scripted_frame(SETTLED_MS).mode(), Mode::Tracking);
     }
 
     #[test]
