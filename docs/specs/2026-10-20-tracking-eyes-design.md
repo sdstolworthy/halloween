@@ -126,7 +126,10 @@ go idle, so a later visitor never inherits it.
 
     The whole blink is clamped to **150–450 ms**, since human blinks run ~100–400 ms and gaze-evoked ones
     longer, with its start kept fixed. The clamp never pushes the reopening past the moment the gaze
-    lands (95%). The lazy idle spring therefore reopens a little early: at 84% of
+    lands (95%). Neither lid ramp is ever quicker than **65 ms** (`MIN_RAMP_MS`, about a routine blink's
+    70 ms close, so the lid moves at most ~0.08 per 5 ms frame); a move that lands too soon to fit both
+    ramps (130 ms) gets **no** blink rather than a twitch. That mostly happens when the eyes are already
+    racing towards the target. The lazy idle spring therefore reopens a little early: at 84% of
     the move, still before it settles. A very stiff spring would get a blink that slightly outlasts the
     move rather than a twitch. Retuning ω moves every point with it; a test checks the timeline halves
     when ω doubles.
@@ -137,8 +140,10 @@ go idle, so a later visitor never inherits it.
     both). A due blink waits until the gaze settles.
   - **Acquisition:** the startled blink on noticing a visitor uses the same coupled timeline on the
     tracking spring (closes after the eyes start towards the visitor, reopens before they land), still at
-    most once per 3 s. If an idle saccade's blink is already under way, it is **retimed** onto the
-    acquisition's timeline instead (whatever the rate limit), so it cannot still be shut after the faster
+    most once per 3 s. An idle saccade's blink that is scheduled but hasn't started belongs to the
+    abandoned glance and is dropped; the acquisition blink then follows the rate limit as usual. If an idle
+    saccade's blink is already under way, it is **retimed** onto the acquisition's timeline instead
+    (whatever the rate limit), so it cannot still be shut after the faster
     tracking gaze lands. The retimed blink continues from the lid's current position, with no visible
     jump: a closing lid keeps closing to shut at the acquisition's shut point, a shut lid stays shut until
     then, and a reopening lid just finishes sooner. It never ends later than either the original or the
