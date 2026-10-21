@@ -158,6 +158,8 @@ pub struct Eyes<R: Rng> {
     evil_timed_out: bool,
     /// The start of the blink chosen to hide a pending look switch.
     switch_carrier_ms: Option<u64>,
+    /// The current blink hid a look switch; no double blink follows it.
+    blink_carried_switch: bool,
     brow: f32,
     dilation: f32,
     squint: f32,
@@ -185,6 +187,7 @@ impl<R: Rng> Eyes<R> {
             evil_since_ms: None,
             evil_timed_out: false,
             switch_carrier_ms: None,
+            blink_carried_switch: false,
             brow: 0.0,
             dilation: IDLE_DILATION,
             squint: 0.0,
@@ -350,7 +353,12 @@ impl<R: Rng> Eyes<R> {
                     .filter(|blink| now_ms >= blink.start_ms && !blink.is_over(now_ms));
                 if let Some(blink) = under_way {
                     let timeline = Blink::move_timeline(now_ms, self.springs, targets, TRACK_OMEGA);
-                    self.blink = Some(blink.retimed_to(now_ms, timeline));
+                    let retimed = blink.retimed_to(now_ms, timeline);
+                    // A pending look switch rides on: the retimed blink is the same blink to the eye.
+                    if self.switch_carrier_ms == Some(blink.start_ms) {
+                        self.switch_carrier_ms = Some(retimed.start_ms);
+                    }
+                    self.blink = Some(retimed);
                 } else {
                     self.blink = None;
                     let acquisition =
@@ -412,11 +420,8 @@ impl<R: Rng> Eyes<R> {
     }
 
     fn forced_saccade_target(&mut self) -> Vec2 {
-        let side = if self.gaze_centre().x >= 0.0 {
-            -1.0
-        } else {
-            1.0
-        };
+        // -1 when the gaze is right of centre, else +1; arithmetic rather than a float select (see `tick`).
+        let side = 1.0 - 2.0 * f32::from(u8::from(self.gaze_centre().x >= 0.0));
         Vec2::new(
             side * self
                 .rng
@@ -467,8 +472,10 @@ impl<R: Rng> Eyes<R> {
         if let Some(blink) = self.blink.filter(|blink| blink.is_over(now_ms)) {
             self.blink = None;
             if self.mode == Mode::Tracking {
-                self.schedule_routine_blink(now_ms, blink.kind == BlinkKind::Routine);
+                let after_routine = blink.kind == BlinkKind::Routine && !self.blink_carried_switch;
+                self.schedule_routine_blink(now_ms, after_routine);
             }
+            self.blink_carried_switch = false;
         }
         let routine_due = self.mode == Mode::Tracking
             && self.blink.is_none()
@@ -487,6 +494,7 @@ impl<R: Rng> Eyes<R> {
             {
                 self.look = self.requested_look;
                 self.switch_carrier_ms = None;
+                self.blink_carried_switch = true;
                 // Normally inside the carrier's shut hold anyway; at a very low frame rate this frame is
                 // drawn shut rather than ever showing the new palette with the lid open.
                 1.0
@@ -1161,6 +1169,54 @@ mod tests {
                 .unwrap();
             let on_timeline = eyes.blink.unwrap().closure(switch_ms);
             assert_eq!(on_timeline, 1.0, "{phase}: switched at {switch_ms}");
+        }
+    }
+
+    #[test]
+    fn acquiring_a_visitor_mid_switch_keeps_the_switch_in_the_same_blink() {
+        let mut eyes = eyes();
+        eyes.next_wander_ms = u64::MAX;
+        eyes.tick(1000);
+        eyes.request_look(Look::Evil, 1000);
+        // The routine blink carrying the switch starts at 1000 and is shut 1070..1120; the visitor is
+        // acquired at 1075, while it is shut but before a frame has caught the shut lid.
+        eyes.tick(1000);
+        eyes.observe(Reading::Distance(1.0), 975);
+        eyes.observe(Reading::Distance(1.0), 1075);
+        let mut blink_starts = Vec::new();
+        let mut switched_at = None;
+        for now_ms in (1075..2500).step_by(5) {
+            let before = eyes.blink;
+            let pose = eyes.tick(now_ms);
+            if eyes.blink.is_some() && before.is_none() {
+                blink_starts.push(now_ms);
+            }
+            if pose.look == Look::Evil && switched_at.is_none() {
+                switched_at = Some(now_ms);
+            }
+        }
+        assert!(
+            switched_at.is_some_and(|at| at < 1300) && blink_starts.is_empty(),
+            "switched at {switched_at:?}, new blinks at {blink_starts:?}"
+        );
+    }
+
+    #[test]
+    fn no_double_blink_follows_a_look_switch() {
+        // Tracking eyes switch look with a routine-kind blink; across seeds (15% would draw a double), the
+        // next blink still waits the ordinary 2-5 s.
+        for seed in 1..40 {
+            let mut eyes = Eyes::new(EyesConfig::DEFAULT, SplitMix64::new(seed), 0);
+            run(&mut eyes, Some(Reading::Distance(2.0)), 0, 3000);
+            eyes.blink = None;
+            eyes.next_routine_blink_ms = u64::MAX;
+            eyes.request_look(Look::Evil, 3000);
+            let poses = run(&mut eyes, Some(Reading::Distance(2.0)), 3000, 4500);
+            assert!(
+                blinks(&poses) <= 1,
+                "seed {seed}: {} blinks after the switch",
+                blinks(&poses)
+            );
         }
     }
 
