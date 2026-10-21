@@ -33,6 +33,7 @@ pub struct Emulator {
     message: [u8; MESSAGE_CAPACITY],
     message_len: usize,
     sensor_payload: String,
+    last_pose: Pose,
 }
 
 impl Emulator {
@@ -49,6 +50,7 @@ impl Emulator {
             message: [0; MESSAGE_CAPACITY],
             message_len: 0,
             sensor_payload: String::new(),
+            last_pose: Pose::RESTING,
         }
     }
 
@@ -141,7 +143,17 @@ impl Emulator {
         let pose = self.eyes.tick(now_ms);
         let Ok(()) = eyes_render::draw(&pose, &mut self.framebuffer);
         self.framebuffer.write_rgba(&mut self.rgba);
+        self.last_pose = pose;
         pose
+    }
+
+    /// Lid closure of the last frame, 0 = open, 1 = shut (blink and squint combined, as drawn).
+    pub fn lid(&self) -> f32 {
+        self.last_pose.blink.max(self.last_pose.squint)
+    }
+
+    pub fn gaze_moving(&self) -> bool {
+        self.eyes.gaze_moving()
     }
 
     pub fn mode(&self) -> Mode {
@@ -338,6 +350,16 @@ mod abi {
         emulator().frame(millis(now_ms));
     }
 
+    #[no_mangle]
+    pub extern "C" fn lid() -> f32 {
+        emulator().lid()
+    }
+
+    #[no_mangle]
+    pub extern "C" fn gaze_moving() -> u32 {
+        emulator().gaze_moving() as u32
+    }
+
     /// 0 = idle, 1 = tracking.
     #[no_mangle]
     pub extern "C" fn mode() -> u32 {
@@ -405,6 +427,13 @@ mod tests {
     #[test]
     fn scripted_run_is_tracking() {
         assert_eq!(scripted_frame().mode(), Mode::Tracking);
+    }
+
+    #[test]
+    fn lid_reports_the_last_frames_closure() {
+        let mut emulator = Emulator::new(1, 0);
+        let pose = emulator.frame(100);
+        assert_eq!(emulator.lid(), pose.blink.max(pose.squint));
     }
 
     #[test]

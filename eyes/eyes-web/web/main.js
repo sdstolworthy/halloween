@@ -10,6 +10,9 @@ const SENSOR_HEIGHT_M = 1.0;
 const LED_SCALE = 6;
 const READOUT_PERIOD_MS = 100;
 const SLIDER_MAX_M = 5;
+const SPEEDS = [1, 0.5, 0.25, 0.1];
+// A background tab can stall requestAnimationFrame for seconds; don't replay that as one giant step.
+const MAX_FRAME_GAP_MS = 100;
 
 // Friendly labels and practical slider ranges; the number box still accepts the full validated range.
 // "Right" throughout means: standing at the sensor, looking down the walkway towards visitors (the
@@ -109,6 +112,7 @@ function readUrlState(api) {
     noise: Math.max(0, number("noise", 0.03)),
     seed: Math.trunc(number("seed", 1)) >>> 0,
     gamma: query.get("gamma") !== "0",
+    speed: SPEEDS.includes(number("speed", 1)) ? number("speed", 1) : 1,
   };
 }
 
@@ -136,6 +140,7 @@ function writeUrlState(api, state) {
   query.set("noise", String(state.noise));
   query.set("seed", String(state.seed));
   if (!state.gamma) query.set("gamma", "0");
+  if (state.speed !== 1) query.set("speed", String(state.speed));
   history.replaceState(null, "", `${location.pathname}?${query}`);
 }
 
@@ -297,6 +302,10 @@ async function main() {
   const state = readUrlState(api);
   let random = mulberry32(state.seed);
   let walk = null;
+  // Simulated time fed to the core: real time scaled by the speed control, so slow motion slows the eyes
+  // themselves rather than the display.
+  let simNow = 0;
+  let lastRafMs = null;
   let lastSensorMs = -Infinity;
   let lastReadoutMs = -Infinity;
   let topView = null;
@@ -308,6 +317,7 @@ async function main() {
   const syncVisitorControls = () => {
     $("distance").max = SLIDER_MAX_M;
     $("gamma").checked = state.gamma;
+    $("speed").value = String(state.speed);
     $("distance").value = $("distance-number").value = state.distance.toFixed(2);
     $("nobody").checked = state.nobody;
     $("online").checked = state.online;
@@ -332,16 +342,17 @@ async function main() {
   $("distance-number").addEventListener("change", (event) => { walk = null; setDistance(Number(event.target.value)); });
   $("nobody").addEventListener("change", (event) => { walk = null; state.nobody = event.target.checked; changed(); });
   $("online").addEventListener("change", (event) => { state.online = event.target.checked; changed(); });
+  $("speed").addEventListener("change", (event) => { state.speed = Number(event.target.value); changed(); });
   $("gamma").addEventListener("change", (event) => { state.gamma = event.target.checked; changed(); });
   $("noise").addEventListener("input", (event) => { state.noise = Number(event.target.value); changed(); });
   $("walk").addEventListener("click", () => {
-    walk = { startMs: performance.now(), from: api.value("max_range_m") + 0.3 };
+    walk = { startMs: simNow, from: api.value("max_range_m") + 0.3 };
     state.online = true;
   });
   $("reseed").addEventListener("click", () => {
     state.seed = (Math.random() * 2 ** 32) >>> 0;
     random = mulberry32(state.seed);
-    wasm.reset(state.seed, performance.now());
+    wasm.reset(state.seed, simNow);
     changed();
   });
   $("defaults").addEventListener("click", () => { api.applyJson("{}"); changed(); });
@@ -385,6 +396,8 @@ async function main() {
     }
     $("mode").textContent = mode;
     $("payload").textContent = state.online ? sensorPayload() : "nothing (sensor offline)";
+    $("lid").textContent = `${Math.round(wasm.lid() * 100)}%`;
+    $("motion").textContent = wasm.gaze_moving() ? "moving" : "settled";
     $("mode").classList.toggle("tracking", tracking);
     for (const eye of [0, 1]) {
       const [yaw, pitch] = api.angles(eye, state.distance);
@@ -395,7 +408,11 @@ async function main() {
     drawSideView($("side-view"), api, state, present);
   }
 
-  function frame(now) {
+  function frame(rafNow) {
+    const gap = lastRafMs === null ? 0 : Math.min(rafNow - lastRafMs, MAX_FRAME_GAP_MS);
+    lastRafMs = rafNow;
+    simNow += gap * state.speed;
+    const now = simNow;
     if (walk) {
       const distance = walk.from - (WALK_SPEED_M_S * (now - walk.startMs)) / 1000;
       state.distance = Math.max(WALK_END_M, distance);
@@ -415,14 +432,14 @@ async function main() {
     }
     wasm.frame(now);
     paint();
-    if (now - lastReadoutMs >= READOUT_PERIOD_MS) {
-      lastReadoutMs = now;
+    if (rafNow - lastReadoutMs >= READOUT_PERIOD_MS) {
+      lastReadoutMs = rafNow;
       updateReadout();
     }
     requestAnimationFrame(frame);
   }
 
-  wasm.reset(state.seed, performance.now());
+  wasm.reset(state.seed, simNow);
   changed();
   requestAnimationFrame(frame);
 }

@@ -162,6 +162,15 @@ input[type="number"], textarea {
   font: inherit;
 }
 
+select {
+  background: var(--night);
+  color: var(--bone);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0.3rem 0.4rem;
+  font: inherit;
+}
+
 textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 0.875rem; }
 
 pre {

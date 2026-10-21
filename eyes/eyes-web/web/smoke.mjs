@@ -19,7 +19,7 @@ const required = [
   "param_key_ptr", "param_key_len", "param_min", "param_max", "param_step", "param_default",
   "param_value", "set_param", "input_ptr", "input_capacity", "apply_config_json", "message_ptr",
   "message_len", "sensor_reading", "sensor_payload_ptr", "sensor_payload_len", "panel_display_lut_ptr",
-  "frame", "mode", "gaze_yaw_deg",
+  "frame", "mode", "lid", "gaze_moving", "gaze_yaw_deg",
   "gaze_pitch_deg", "eye_position", "panel_normal",
 ];
 const missing = required.filter((name) => !(name in wasm));

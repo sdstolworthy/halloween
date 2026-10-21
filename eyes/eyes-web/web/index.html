@@ -33,6 +33,7 @@
           </tbody>
         </table>
         <p class="sensor">Sensor sends <code id="payload">–</code></p>
+        <p class="sensor">Lids <span id="lid">–</span> closed, gaze <span id="motion">–</span></p>
         <p class="hint">Angles from each eye to the visitor's face, relative to straight out of the panel.
           Positive yaw is towards the panel's right as you stand in front of it facing it; positive pitch is up.</p>
       </div>
@@ -71,6 +72,15 @@
             <input id="noise" type="range" min="0" max="0.2" step="0.01">
             <output id="noise-value"></output>
           </span>
+        </label>
+        <label class="field">
+          <span>Speed (slow motion shows the blink riding each eye movement)</span>
+          <select id="speed">
+            <option value="1">1× real time</option>
+            <option value="0.5">0.5×</option>
+            <option value="0.25">0.25×</option>
+            <option value="0.1">0.1×</option>
+          </select>
         </label>
         <div class="actions">
           <button id="walk" type="button">Walk up to the door</button>
