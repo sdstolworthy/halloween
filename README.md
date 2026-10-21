@@ -1,7 +1,15 @@
 # Halloween
 
-Porch props, one directory per device. ESPHome devices are flashed with `uvx esphome run <device>/<device>.yaml`.
+Porch props, one directory per device. When someone walks up to the door, Home Assistant's "Porch scare"
+automation makes the skeletons dance, switches WLED to a scare preset and projects a witch onto the door. Each
+device does one job and knows nothing about the others; see
+[the porch show spec](docs/specs/2026-10-20-porch-show-design.md).
+
+ESPHome devices are flashed with `uvx esphome run <device>/<device>.yaml` after copying
+`secrets.example.yaml` to `secrets.yaml` (gitignored) and filling it in.
 
 | Device | What it does |
 | --- | --- |
-| [skeleton-shaker](skeleton-shaker/) | Pressure mat under the doormat triggers a gear motor that shakes a string of skeletons. |
+| [porch-sensor](porch-sensor/) | ESP32 + 3.3 V HC-SR04 distance sensor; publishes Distance and Visitor to HA, with Trigger distance, Max range and Armed tuning entities. |
+| [skeleton-shaker](skeleton-shaker/) | ESP32 + gear motor shakes a string of skeletons when HA presses its Dance button. |
+| [witch-projector](witch-projector/) | Raspberry Pi + mpv holds a black screen and plays the witch video when HA presses Play witch (MQTT). |
