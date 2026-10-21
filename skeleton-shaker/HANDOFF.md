@@ -5,19 +5,26 @@ spec. The living BOM/wiring doc is at https://claude.ai/code/artifact/241c37d0-8
 (Claude Doc; sections: How it works, Bill of materials, Optional extras, Wiring at a glance with schematic,
 Firmware behavior, Build notes and gotchas).
 
+> **Revised 2026-10-20 — network-triggered.** The pressure mat is dropped. The prop now dances only when Home
+> Assistant presses its **Dance** button, fired by the porch scare automation from the `porch-sensor` distance
+> sensor (see `../docs/specs/2026-10-20-porch-show-design.md`). The GPIO33 mat input and the Armed switch are
+> gone (arming lives on the porch sensor); the PG7 mat gland hole gets a blank PG7 plug. Mat-specific text below
+> is struck through or marked superseded and kept only for history.
+
 ## 1. What the prop does
 
-A string of plastic Halloween skeletons hangs on the porch. A pressure mat under the doormat closes when someone
-steps on it. An ESP32 reads that, drives a 12 V gear motor through an H-bridge in short random bursts for a few
-seconds, and a crank arm on the motor shaft tugs a shock cord tied to the skeleton string so they bounce and
-rattle. Then it ignores the mat for a cooldown so a person standing on it doesn't retrigger forever.
+A string of plastic Halloween skeletons hangs on the porch. When Home Assistant presses the ESP32's **Dance**
+button (the porch scare automation does this when the porch sensor sees a visitor), the ESP32 drives a 12 V gear
+motor through an H-bridge in short random bursts for a few seconds, and a crank arm on the motor shaft tugs a
+shock cord tied to the skeleton string so they bounce and rattle. Then it ignores further Dance presses for a
+cooldown so overlapping requests can't stack dances.
 
 ## 2. Hardware (final picks)
 
 | Part | Chosen | Notes |
 | --- | --- | --- |
 | MCU | ESP32 DevKitC, 38-pin (ESP32-WROOM-32E), 54.4 x 27.9 mm | Amazon B09MQJWQN2 (Espressif's own). If a 30-pin DOIT DevKit V1 is used instead, enclosure needs `ESP_L, ESP_W = 51.5, 28.5`. |
-| Trigger | Alarm-type pressure mat, normally-open, ~720 x 390 mm, 3 mm PVC | Contact rated 25 V DC / 0.25 A, IP64 (not waterproof), trips at ~25 kg over a 50 mm disc. Must stay flat, never rolled. 4-wire mats: use only the N.O. pair; the tamper pair stays unconnected. |
+| ~~Trigger~~ (dropped 2026-10-20) | ~~Alarm-type pressure mat, normally-open, ~720 x 390 mm, 3 mm PVC~~ | ~~Contact rated 25 V DC / 0.25 A, IP64 (not waterproof), trips at ~25 kg over a 50 mm disc. Must stay flat, never rolled. 4-wire mats: use only the N.O. pair; the tamper pair stays unconnected.~~ Replaced by the network-triggered Dance button. |
 | Motor | Greartisan DC 12 V, 100 RPM, 37 mm gearbox, **eccentric** output shaft, 6 mm D-shaft | Eccentric chosen over centric: standard 37D form factor, fits common brackets, fewer gear stages (less backlash on direction reversals). 60 RPM also fine. Shaft side-load limit ~1 kg, so keep the crank arm tight to the gearbox face. |
 | Motor driver | L298N dual H-bridge module | Takes 3.3 V logic. Jumpers: **5V-EN ON** (onboard regulator powers logic from 12 V), **ENA jumper OFF** (so GPIO27 PWMs speed). DRV8871 is a smaller/cooler alternative if desired. |
 | Power | 12 V 3 A wall adapter, 5.5 x 2.1 mm barrel → female barrel-jack-to-screw-terminal adapter | Adapter stays indoors / covered outlet. |
@@ -28,10 +35,10 @@ rattle. Then it ignores the mat for a cooldown so a person standing on it doesn'
 | Crank arm | 3D-printed `crank_arm.stl` | Bolts to the hub face with 2x M3 x 8; slotted holes fit the hub's bolt circle (r 7–11 mm) without measuring. M4 x 20 bolt + nylock nut as the crank pin, holes at 20 / 30 / 40 mm throw. Start at 30. |
 | Motor mount | 37 mm gear-motor L-bracket (6x M3 pattern) | Mount motor above the string's midpoint. |
 | Linkage | 1/8 in shock cord from crank pin to skeleton string | Elastic gives a bounce; rigid cord yanks hooks out. |
-| Enclosure | 3D-printed `enclosure_base.stl` + `enclosure_lid.stl` | See §5. Glands: 2x PG9 (16 mm holes: power, motor), 1x PG7 (12.5 mm: mat lead). |
-| Wire | 18–20 AWG silicone for 12 V and motor runs; 22 AWG for the mat lead | Twisted pair for the mat if the run is long; 100 nF from GPIO33 to GND kills false triggers from motor noise. |
+| Enclosure | 3D-printed `enclosure_base.stl` + `enclosure_lid.stl` | See §5. Glands: 2x PG9 (16 mm holes: power, motor), 1x PG7 (12.5 mm: formerly the mat lead, now a blank PG7 plug). |
+| Wire | 18–20 AWG silicone for 12 V and motor runs | (The 22 AWG mat lead and its 100 nF GPIO33 filter cap are no longer needed.) |
 
-Approximate cost: ~$154 all-in (ESP32 $9, mat $20, motor $18, L298N $7, PSU $12, buck $5, hub $13, bracket $6,
+Approximate cost: ~$154 all-in as originally specced, ~$134 without the mat (ESP32 $9, mat $20, motor $18, L298N $7, PSU $12, buck $5, hub $13, bracket $6,
 cord $6, enclosure consumables, glands, wire, WAGOs, screw-terminal breakout, etc.). Optional extras in the doc:
 DFPlayer Mini + speaker for sound, WS2812B eyes, HC-SR501 PIR as second trigger, wiper-motor + BTS7960 upgrade
 for heavy skeletons.
@@ -50,24 +57,36 @@ takes 12 V in and feeds the ESP32 5V pin; all grounds common.
 | **ESP32 GPIO25** | L298N IN1 | direction A |
 | **ESP32 GPIO26** | L298N IN2 | direction B |
 | **ESP32 GPIO27** | L298N ENA | PWM speed (LEDC), ENA jumper removed |
-| **ESP32 GPIO33** | Pressure mat lead 1 | `INPUT_PULLUP`; closes to GND when stepped on (active LOW) |
-| ESP32 GND | Pressure mat lead 2 | |
+| ~~ESP32 GPIO33~~ | ~~Pressure mat lead 1~~ | Removed 2026-10-20; GPIO33 is unused. |
 | ESP32 GND | GND rail | common ground |
 | L298N OUT1 / OUT2 | Motor | polarity irrelevant; swap to flip direction |
 
-Avoid GPIO 0, 2, 12, 15 for the mat (boot strapping pins). USB cutout in the enclosure lets you flash without
+Avoid GPIO 0, 2, 12, 15 for any future input (boot strapping pins). USB cutout in the enclosure lets you flash without
 opening the box.
 
-## 4. Firmware — TO BE WRITTEN (this is the main job for Claude Code)
+## 4. Firmware — done (`skeleton-shaker.yaml` + `shaker.h`)
+
+Current behavior (supersedes items 1, 4 and 5's "no network" wording below):
+
+- **Dance** button (HA / web UI) runs the dance script; it is the porch scare automation's entry point. **Stop**
+  aborts and coasts the motor. A State text sensor reports idle / dancing / cooldown.
+- The cooldown lives inside the `mode: single` dance script, so a Dance press during the dance or the cooldown is
+  logged and ignored.
+- The prop needs the network now, so Wi-Fi keeps ESPHome's default reboot timeout (reboot after 15 min without
+  Wi-Fi aids recovery); `api: reboot_timeout: 0s` stays so Home Assistant being down doesn't reboot it.
+- Coasting: on the L298N, IN1 = IN2 with ENA high is a hard *brake*. The firmware coasts by dropping ENA (PWM) to
+  0 and then setting IN1 = IN2 = LOW. This supersedes "IN1=IN2=LOW to coast" in items 2 and 3 below.
+
+Original brief, kept for history:
 
 Target: Arduino-ESP32 sketch (PlatformIO or Arduino IDE), or an ESPHome YAML. Behavior spec:
 
-1. `GPIO33` with internal pull-up, 50 ms debounce; a falling edge (mat pressed) is a step.
+1. ~~`GPIO33` with internal pull-up, 50 ms debounce; a falling edge (mat pressed) is a step.~~ Superseded by the Dance button.
 2. On trigger, run a **dance** for 6–10 s (random): loop of bursts 150–500 ms long; before each burst randomly
    pick direction (flip IN1/IN2) and PWM duty 50–100 % on ENA (`ledcSetup`/`ledcWrite`, 1–5 kHz, 8-bit);
    pause 50–200 ms between bursts (IN1=IN2=LOW to coast).
 3. Stop with IN1 and IN2 both LOW (coast, not brake).
-4. Ignore the mat during the dance and for a **cooldown** of 3–5 s after it.
+4. Ignore triggers during the dance and for a **cooldown** of 3–5 s after it.
 5. Nice-to-have: Wi-Fi + ArduinoOTA (or ESPHome's OTA + web dashboard) so dance length, burst range, duty
    range and cooldown can be tuned without opening the box. Keep Wi-Fi optional/non-blocking; the prop must
    work with no network.
@@ -77,8 +96,8 @@ ESPHome equivalent: `binary_sensor` (gpio, `inverted: true`, `mode: {input: true
 `script` doing the random bursts on an `hbridge` fan (`pin_a: GPIO25`, `pin_b: GPIO26`, `enable_pin: GPIO27`
 as a `ledc` output), plus `ota:` and `web_server:`.
 
-Bench test order: set buck to 5.0 V unloaded → wire everything with the motor unloaded → verify trigger/cooldown
-on serial → add the crank and string.
+Bench test order: set buck to 5.0 V unloaded → wire everything with the motor unloaded → press Dance from the web
+UI and verify dance/cooldown on serial → add the crank and string.
 
 ## 5. Enclosure (done, parametric)
 
@@ -95,7 +114,7 @@ Geometry (mm, interior origin at the front-left floor corner; y=0 is the gland w
 - WAGO cradle against the back wall (y=84) behind the L298N: two pockets 21.2 x ~20 inside, 6 mm walls, 2 mm
   lip at the wire-entry face, starting x=10. Sized from WAGO's 20.6 x 18.6 x 8.3 mm body + 0.6 mm clearance —
   unverified against a physical part; measure one.
-- Gland wall (y=0): PG9 holes (r 8) at x=20 and x=46, PG7 hole (r 6.25) at x=102, all at z=18.
+- Gland wall (y=0): PG9 holes (r 8) at x=20 and x=46, PG7 hole (r 6.25) at x=102 (blank plug since the mat was dropped), all at z=18.
 - Four M3 corner bosses (2.6 mm holes for thread-forming screws; drill 4 mm for heat-set inserts). Lid has a
   3.5 mm lip that seats inside the walls, M3 clearance + counterbore.
 - Two wall-mount ears on the left/right outer walls, 4.5 mm holes for #8 screws. Mount floor flat, glands down.

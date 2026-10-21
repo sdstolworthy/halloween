@@ -14,12 +14,11 @@ esp32:
 logger:
   baud_rate: 115200
 
-# The prop must work with no network, so nothing here is allowed to reboot the board when Wi-Fi or
-# Home Assistant is missing (both default to rebooting after 15 min).
+# The dance is triggered over the network, so a Wi-Fi reboot after the default 15 min helps it recover. Home
+# Assistant being down is not a board fault, so the API must not reboot it.
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
-  reboot_timeout: 0s
   ap:
     ssid: Skeleton-Shaker
     password: !secret ap_password
@@ -75,45 +74,19 @@ output:
     pin: GPIO27
     frequency: 2000Hz
 
-binary_sensor:
-  - platform: gpio
-    id: mat
-    name: Pressure mat
-    pin:
-      number: GPIO33
-      inverted: true
-      mode:
-        input: true
-        pullup: true
-    filters:
-      - delayed_on: 50ms
-      - delayed_off: 50ms
+button:
+  - platform: template
+    name: Dance
     on_press:
       - if:
           condition:
-            and:
-              - switch.is_on: armed
-              - not:
-                  script.is_running: dance
+            script.is_running: dance
           then:
-            - script.execute: dance
-          else:
             - logger.log:
                 level: INFO
-                format: "Step ignored (disarmed, dancing, or cooling down)"
-
-switch:
-  - platform: template
-    id: armed
-    name: Armed
-    optimistic: true
-    restore_mode: RESTORE_DEFAULT_ON
-
-button:
-  - platform: template
-    name: Test dance
-    on_press:
-      - script.execute: dance
+                format: "Dance ignored (dancing or cooling down)"
+          else:
+            - script.execute: dance
   - platform: template
     name: Stop
     on_press:
@@ -220,8 +193,8 @@ script:
       - output.turn_off: in1
       - output.turn_off: in2
 
-  # mode: single plus the cooldown living inside the script is what makes the mat ignore steps
-  # during the dance and the cooldown: script.is_running covers both.
+  # mode: single plus the cooldown living inside the script is what makes overlapping Dance presses
+  # (during the dance or the cooldown) no-ops instead of stacked dances.
   - id: dance
     mode: single
     then:
@@ -229,7 +202,7 @@ script:
           id(dance_started_at) = millis();
           id(dance_length_ms) = shaker::pick_in_range(
               uint32_t(id(dance_min_s).state * 1000), uint32_t(id(dance_max_s).state * 1000), random_uint32());
-          ESP_LOGI("shaker", "Step! Dancing for %" PRIu32 " ms", id(dance_length_ms));
+          ESP_LOGI("shaker", "Dancing for %" PRIu32 " ms", id(dance_length_ms));
       - text_sensor.template.publish:
           id: shaker_state
           state: dancing
