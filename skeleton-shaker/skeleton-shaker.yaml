@@ -1,12 +1,17 @@
 esphome:
   name: skeleton-shaker
   friendly_name: Skeleton Shaker
+  min_version: 2026.9.0
   includes:
     - shaker.h
   on_boot:
-    priority: 800
+    # 600 runs after the LEDC output's setup; at 800 the ENA write is dropped as "not yet initialized".
+    priority: 600
     then:
       - script.execute: motor_coast
+      - text_sensor.template.publish:
+          id: shaker_state
+          state: idle
 
 esp32:
   board: esp32dev
@@ -33,7 +38,6 @@ api:
 ota:
   - platform: esphome
     encryption:
-      key: !secret api_key
 
 web_server:
   port: 80

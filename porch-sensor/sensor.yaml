@@ -1,18 +1,25 @@
 # Porch distance sensor as an ESPHome package, so it can be merged into another device with one `packages:` line.
-# SparkFun 3.3 V HC-SR04: Trig GPIO32, Echo GPIO35.
+# SparkFun 3.3 V HC-SR04: Trig GPIO32, Echo GPIO35 by default; a host device can override the pin substitutions.
 
 substitutions:
+  porch_trigger_pin: GPIO32
+  porch_echo_pin: GPIO35
   # Farthest the sensor can report. No echo and readings beyond Max range are reported as this, so "nobody" is
   # always far away and never zero.
   porch_nobody_m: "4.5"
+
+logger:
+  logs:
+    # The ultrasonic component logs every reading at DEBUG, 10 times a second.
+    ultrasonic.sensor: INFO
 
 sensor:
   - platform: ultrasonic
     id: porch_distance_raw
     name: Distance (raw)
     internal: true
-    trigger_pin: GPIO32
-    echo_pin: GPIO35
+    trigger_pin: ${porch_trigger_pin}
+    echo_pin: ${porch_echo_pin}
     timeout: ${porch_nobody_m}m
     update_interval: 100ms
     filters:
@@ -33,19 +40,27 @@ sensor:
           period: 30s
           optimistic: true
 
+  # analog_threshold is ON at or above its threshold, so Visitor compares the negated distance: "closer than the
+  # trigger distance" becomes "above minus the trigger distance". Thresholding the raw distance and inverting
+  # instead would turn analog_threshold's initial OFF (no reading yet) into a Visitor ON at boot.
+  - platform: copy
+    source_id: porch_distance_raw
+    id: porch_distance_negated
+    internal: true
+    filters:
+      - multiply: -1
+
 binary_sensor:
-  # analog_threshold is ON when the distance is far (>= upper to turn on, < lower to turn off), so it is inverted.
-  # Disarming drops both thresholds to 0, which forces "far" on the next reading.
+  # Disarming raises both thresholds above any negated distance, so Visitor can only be OFF.
   - platform: analog_threshold
     id: porch_visitor
     name: Visitor
     device_class: occupancy
-    sensor_id: porch_distance_raw
+    sensor_id: porch_distance_negated
     threshold:
-      upper: !lambda "return id(porch_armed).state ? id(porch_trigger_distance).state + 0.3f : 0.0f;"
-      lower: !lambda "return id(porch_armed).state ? id(porch_trigger_distance).state : 0.0f;"
+      upper: !lambda "return id(porch_armed).state ? -id(porch_trigger_distance).state : 1.0f;"
+      lower: !lambda "return id(porch_armed).state ? -(id(porch_trigger_distance).state + 0.3f) : 1.0f;"
     filters:
-      - invert:
       - delayed_on_off:
           time_on: 300ms
           time_off: 2s

@@ -5,7 +5,7 @@ automation makes the skeletons dance, switches WLED to a scare preset and projec
 device does one job and knows nothing about the others; see
 [the porch show spec](docs/specs/2026-10-20-porch-show-design.md).
 
-ESPHome devices are flashed with `uvx esphome run <device>/<device>.yaml` after copying
+ESPHome devices are flashed with `uvx esphome@2026.9.1 run <device>/<device>.yaml` after copying
 `secrets.example.yaml` to `secrets.yaml` (gitignored) and filling it in.
 
 | Device | What it does |

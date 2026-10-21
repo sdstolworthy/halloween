@@ -1,6 +1,7 @@
 esphome:
   name: porch-sensor
   friendly_name: Porch Sensor
+  min_version: 2026.9.0
 
 esp32:
   board: esp32dev
@@ -8,8 +9,7 @@ esp32:
 logger:
   baud_rate: 115200
   logs:
-    # The ultrasonic sensor reports 10 times a second; at DEBUG its readings drown out the Visitor transitions.
-    ultrasonic.sensor: INFO
+    # Distance publishes 10 times a second; at DEBUG it drowns out the Visitor transitions.
     sensor: INFO
 
 # Rebooting after the default 15 min without Wi-Fi helps the sensor recover. Home Assistant being down is not a
@@ -31,7 +31,6 @@ api:
 ota:
   - platform: esphome
     encryption:
-      key: !secret api_key
 
 web_server:
   port: 80

@@ -8,9 +8,9 @@ The press comes from the porch scare automation, triggered by the `porch-sensor`
 ## Firmware (ESPHome)
 
 ```sh
-cp secrets.example.yaml secrets.yaml   # fill in; api_key from `openssl rand -base64 32`
-uvx esphome run skeleton-shaker.yaml   # first flash over USB; later flashes go over Wi-Fi
-uvx esphome logs skeleton-shaker.yaml  # serial/network logs (115200 baud)
+cp secrets.example.yaml secrets.yaml            # fill in; api_key from `openssl rand -base64 32`
+uvx esphome@2026.9.1 run skeleton-shaker.yaml   # first flash over USB; later flashes go over Wi-Fi
+uvx esphome@2026.9.1 logs skeleton-shaker.yaml  # serial/network logs (115200 baud)
 ```
 
 Entities (in Home Assistant or at `http://skeleton-shaker.local`):

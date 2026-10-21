@@ -56,7 +56,7 @@ can later be merged into another device (shaker or eyes) with a one-line include
   "nobody", i.e. not below any threshold — never as zero distance.
 - Two distance sensors:
   - **Distance (raw, internal)** — ~10 Hz, feeds Visitor and (later) the eyes. Not sent to HA.
-  - **Distance** (published) — derived from the raw sensor, sent on change ≥ 5 cm or at least every 30 s, so the HA
+  - **Distance** (published) — derived from the raw sensor, sent on change > 5 cm or at least every 30 s, so the HA
     recorder isn't flooded.
 - **Visitor** binary sensor, built from ESPHome filters (no custom C++):
   - on after distance < *Trigger distance* continuously for 300 ms;
@@ -86,8 +86,8 @@ can later be merged into another device (shaker or eyes) with a one-line include
 
 - Raspberry Pi 4 or 5, Raspberry Pi OS Lite (Bookworm), HDMI to the projector, reachable over SSH.
 - **mpv** as a long-running systemd service, fullscreen, no desktop session:
-  `--idle --force-window --fullscreen --background=color --background-color=0/0/0 --keep-open=no`
-  (exact flags verified against the installed mpv version), JSON IPC socket at `/run/witch/mpv.sock`.
+  `--idle --force-window --fullscreen --keep-open=no` (the window background defaults to black; exact flags
+  verified against the installed mpv version), JSON IPC socket at `/run/witch/mpv.sock`.
   Idle shows black; at end of file mpv returns to idle black.
 - Audio: HDMI to the projector by default (one mpv option to change).
 - Video at `/opt/witch/witch.mp4` (supplied by the user, not in git).
