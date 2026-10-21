@@ -17,7 +17,7 @@
 //! 150–450 ms, keeping its start fixed: a lazy spring gets a brisker reopening (still well before
 //! settling), and a very stiff spring a blink that slightly outlasts its move rather than a twitch.
 
-use libm::expf;
+use libm::{ceilf, expf, roundf};
 
 use crate::geometry::Vec2;
 use crate::motion::Spring;
@@ -147,38 +147,44 @@ impl Blink {
         }
     }
 
-    /// This blink, already under way at `now_ms`, finished on `target`'s (faster) timeline: it never ends
-    /// later than `target` would, and it carries on from the current closure so the lid never jumps.
-    /// Closing continues to shut at `target`'s shut point; shut stays shut until then; reopening just
-    /// finishes sooner.
+    /// This blink, already under way at `now_ms`, finished on `target`'s (faster) timeline: it carries on
+    /// from the current closure so the lid never jumps, closing continues to shut at `target`'s shut point,
+    /// shut stays shut until then, and reopening finishes sooner, never later than either blink would.
+    /// The remaining ramps still respect [`MIN_RAMP_MS`] in proportion to how far the lid has left to go;
+    /// where that can't fit before `target` ends (a crafted, near-instant move), smoothness wins and the
+    /// lid finishes opening a little after the gaze lands.
     pub fn retimed_to(&self, now_ms: u64, target: Blink) -> Blink {
         let closure = self.closure(now_ms);
-        let end_ms = self.end_ms.min(target.end_ms).max(now_ms + 1);
+        let ramp_for = |fraction: f32| ceilf(MIN_RAMP_MS as f32 * fraction) as u64;
+        let end_by = self.end_ms.min(target.end_ms);
         if now_ms < self.closed_ms {
-            let closed_ms = target
-                .closed_ms
-                .clamp(now_ms + 1, end_ms.max(now_ms + 2) - 1);
+            // Never later than this blink's own shut point (retiming only speeds a blink up), which also
+            // keeps the back-dated start below from reaching before this blink's own start.
+            let floor_ms = now_ms + ramp_for(1.0 - closure).max(1);
+            let closed_ms = target.closed_ms.min(self.closed_ms).max(floor_ms);
             // Back-date the start so the closing ramp passes through the current closure now.
             let lead_ms = closure / (1.0 - closure) * (closed_ms - now_ms) as f32;
             return Blink {
                 kind: BlinkKind::Coupled,
-                start_ms: now_ms.saturating_sub(lead_ms as u64),
+                start_ms: now_ms.saturating_sub(roundf(lead_ms) as u64),
                 closed_ms,
                 reopen_ms: closed_ms,
-                end_ms: end_ms.max(closed_ms + 1),
+                end_ms: end_by.max(closed_ms + MIN_RAMP_MS),
             };
         }
         if now_ms < self.reopen_ms {
+            let reopen_ms = target.closed_ms.min(self.reopen_ms).max(now_ms);
             return Blink {
                 kind: BlinkKind::Coupled,
                 start_ms: now_ms.saturating_sub(1),
                 closed_ms: now_ms,
-                reopen_ms: target.closed_ms.clamp(now_ms, end_ms - 1),
-                end_ms,
+                reopen_ms,
+                end_ms: end_by.max(reopen_ms + MIN_RAMP_MS),
             };
         }
         // Reopening: stretch the opening ramp back in time so it passes through the current closure.
-        let span_ms = ((end_ms - now_ms) as f32 / closure.max(f32::EPSILON)) as u64;
+        let end_ms = end_by.max(now_ms + ramp_for(closure).max(1));
+        let span_ms = roundf((end_ms - now_ms) as f32 / closure.max(f32::EPSILON)) as u64;
         let reopen_ms = end_ms.saturating_sub(span_ms).min(now_ms);
         Blink {
             kind: BlinkKind::Coupled,
@@ -400,6 +406,34 @@ mod tests {
                             "ω {omega}: {blink:?} moves {steepest} per 5 ms"
                         );
                     }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn retimed_blinks_never_make_the_lid_jump() {
+        // Crafted: an idle saccade's blink caught at every 5 ms of its life by a tracking move from every
+        // speed and distance, including near-instant ones.
+        let idle = Blink::during_shift(0, 6.0);
+        for now_ms in (idle.start_ms..idle.end_ms).step_by(5) {
+            for speed_tenths in (-30..=30).step_by(3) {
+                for distance_fiftieths in (1..=50).step_by(3) {
+                    let (springs, targets) =
+                        moving_towards(speed_tenths as f32 * 0.1, distance_fiftieths as f32 * 0.02);
+                    let target = Blink::move_timeline(now_ms, springs, targets, 14.0);
+                    let retimed = idle.retimed_to(now_ms, target);
+                    let mut previous = idle.closure(now_ms);
+                    let mut steepest = 0.0_f32;
+                    for at_ms in (now_ms..=retimed.end_ms + 5).step_by(5) {
+                        let closure = retimed.closure(at_ms);
+                        steepest = steepest.max((closure - previous).abs());
+                        previous = closure;
+                    }
+                    assert!(
+                        steepest <= 0.08,
+                        "at {now_ms} ms: {retimed:?} moves {steepest} per 5 ms"
+                    );
                 }
             }
         }
