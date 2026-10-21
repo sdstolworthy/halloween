@@ -15,9 +15,11 @@
 extern crate alloc;
 
 mod app;
+mod mailbox;
 pub mod mock;
 
 pub use app::{App, MAX_MESSAGES_PER_FRAME};
+pub use mailbox::{Delivery, Mailbox};
 
 use alloc::string::String;
 use alloc::vec::Vec;
