@@ -1,0 +1,93 @@
+# Porch distance sensor as an ESPHome package, so it can be merged into another device with one `packages:` line.
+# SparkFun 3.3 V HC-SR04: Trig GPIO32, Echo GPIO35.
+
+substitutions:
+  # Farthest the sensor can report. No echo and readings beyond Max range are reported as this, so "nobody" is
+  # always far away and never zero.
+  porch_nobody_m: "4.5"
+
+sensor:
+  - platform: ultrasonic
+    id: porch_distance_raw
+    name: Distance (raw)
+    internal: true
+    trigger_pin: GPIO32
+    echo_pin: GPIO35
+    timeout: ${porch_nobody_m}m
+    update_interval: 100ms
+    filters:
+      - lambda: |-
+          return (std::isnan(x) || x > id(porch_max_range).state) ? ${porch_nobody_m}f : x;
+      - median:
+          window_size: 5
+          send_every: 1
+          send_first_at: 1
+
+  - platform: copy
+    source_id: porch_distance_raw
+    id: porch_distance
+    name: Distance
+    filters:
+      - delta: 0.05
+      - heartbeat:
+          period: 30s
+          optimistic: true
+
+binary_sensor:
+  # analog_threshold is ON when the distance is far (>= upper to turn on, < lower to turn off), so it is inverted.
+  # Disarming drops both thresholds to 0, which forces "far" on the next reading.
+  - platform: analog_threshold
+    id: porch_visitor
+    name: Visitor
+    device_class: occupancy
+    sensor_id: porch_distance_raw
+    threshold:
+      upper: !lambda "return id(porch_armed).state ? id(porch_trigger_distance).state + 0.3f : 0.0f;"
+      lower: !lambda "return id(porch_armed).state ? id(porch_trigger_distance).state : 0.0f;"
+    filters:
+      - invert:
+      - delayed_on_off:
+          time_on: 300ms
+          time_off: 2s
+    on_press:
+      - logger.log:
+          level: INFO
+          format: "Visitor arrived"
+    on_release:
+      - logger.log:
+          level: INFO
+          format: "Visitor left"
+
+number:
+  - platform: template
+    id: porch_trigger_distance
+    name: Trigger distance
+    entity_category: config
+    unit_of_measurement: m
+    optimistic: true
+    restore_value: true
+    mode: box
+    min_value: 0.3
+    max_value: 4.0
+    step: 0.05
+    initial_value: 2.0
+  - platform: template
+    id: porch_max_range
+    name: Max range
+    entity_category: config
+    unit_of_measurement: m
+    optimistic: true
+    restore_value: true
+    mode: box
+    min_value: 0.5
+    max_value: ${porch_nobody_m}
+    step: 0.05
+    initial_value: 4.0
+
+switch:
+  - platform: template
+    id: porch_armed
+    name: Armed
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON

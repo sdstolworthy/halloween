@@ -1,0 +1,45 @@
+esphome:
+  name: porch-sensor
+  friendly_name: Porch Sensor
+
+esp32:
+  board: esp32dev
+
+logger:
+  baud_rate: 115200
+  logs:
+    # The ultrasonic sensor reports 10 times a second; at DEBUG its readings drown out the Visitor transitions.
+    ultrasonic.sensor: INFO
+    sensor: INFO
+
+# Rebooting after the default 15 min without Wi-Fi helps the sensor recover. Home Assistant being down is not a
+# board fault, so the API must not reboot it.
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: Porch-Sensor
+    password: !secret ap_password
+
+captive_portal:
+
+api:
+  encryption:
+    key: !secret api_key
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome
+    encryption:
+      key: !secret api_key
+
+web_server:
+  port: 80
+  ota: false
+  auth:
+    type: digest
+    username: admin
+    password: !secret web_password
+
+packages:
+  porch_sensor: !include sensor.yaml
