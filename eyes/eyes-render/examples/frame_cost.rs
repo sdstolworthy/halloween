@@ -5,7 +5,7 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use eyes_core::{Pose, Vec2};
+use eyes_core::{Look, Pose, Vec2};
 use eyes_render::{draw, Framebuffer};
 
 const FRAMES: u32 = 5_000;
@@ -24,6 +24,20 @@ fn main() {
             ..Pose::RESTING
         },
     ];
+    let evil = poses.map(|pose| Pose {
+        look: Look::Evil,
+        brow: 1.0,
+        ..pose
+    });
+    for (name, poses) in [("normal", poses), ("evil", evil)] {
+        println!(
+            "{name}: {:.1} µs per 128x64 frame over {FRAMES} frames",
+            per_frame_us(&poses)
+        );
+    }
+}
+
+fn per_frame_us(poses: &[Pose]) -> f64 {
     let mut framebuffer = Framebuffer::new();
     let started = Instant::now();
     for frame in 0..FRAMES {
@@ -31,9 +45,5 @@ fn main() {
         let Ok(()) = draw(black_box(pose), &mut framebuffer);
         black_box(&framebuffer);
     }
-    let per_frame = started.elapsed() / FRAMES;
-    println!(
-        "{FRAMES} frames, {:.1} µs per 128x64 frame",
-        per_frame.as_secs_f64() * 1e6
-    );
+    started.elapsed().as_secs_f64() * 1e6 / f64::from(FRAMES)
 }

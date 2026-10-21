@@ -15,7 +15,7 @@ use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::Rectangle;
 use eyes_core::layout::{EYE_CENTRES_PX, PANEL_HEIGHT, PANEL_WIDTH};
-use eyes_core::{Pose, Vec2};
+use eyes_core::{Look, Pose, Vec2};
 use libm::sqrtf;
 
 /// Sclera half-width and half-height in pixels.
@@ -43,6 +43,24 @@ const IRIS_INNER: [f32; 3] = [255.0, 170.0, 20.0];
 const IRIS_OUTER: [f32; 3] = [185.0, 30.0, 0.0];
 const LIMBUS: Rgb888 = Rgb888::new(90, 10, 0);
 const GLINT: Rgb888 = Rgb888::new(255, 240, 220);
+
+// Evil look: black sclera, a red-hot pupil fading through a glowing red iris. Pure black would make the
+// eye vanish against the dark panel, so the sclera keeps a faint dark-red rim that brightens towards the
+// edge, and the iris blooms a little onto it. Mostly-black eyes draw far less current than the bone-white
+// normal ones, so this stays inside the same brightness budget.
+const EVIL_PUPIL_CORE: [f32; 3] = [255.0, 120.0, 50.0];
+const EVIL_PUPIL_EDGE: [f32; 3] = [255.0, 30.0, 0.0];
+const EVIL_IRIS_INNER: [f32; 3] = [140.0, 0.0, 0.0];
+const EVIL_IRIS_OUTER: [f32; 3] = [70.0, 0.0, 0.0];
+const EVIL_LIMBUS: Rgb888 = Rgb888::new(35, 0, 0);
+const EVIL_SCLERA_CENTRE_RED: f32 = 8.0;
+const EVIL_SCLERA_RIM_RED: f32 = 80.0;
+const EVIL_BLOOM_PX: f32 = 3.5;
+const EVIL_BLOOM_RED: f32 = 110.0;
+/// The evil brow narrows the eye a little and slants each upper lid down towards the nose. It only ever
+/// lowers the lid (never lifts the outer corner above the eyeball), so the eye stays an eye shape.
+const EVIL_NARROWING: f32 = 0.22;
+const EVIL_TILT_PX: f32 = 16.0;
 
 /// Render `pose` over the whole panel area of `target`.
 pub fn draw<D>(pose: &Pose, target: &mut D) -> Result<(), D::Error>
@@ -84,12 +102,15 @@ struct Eye {
     pupil_radius: f32,
     pupil_radius_squared: f32,
     glint: Vec2,
+    evil: bool,
     columns: [Column; EYE_COLUMNS as usize],
 }
 
 const IRIS_RADIUS_SQUARED: f32 = IRIS_RADIUS_PX * IRIS_RADIUS_PX;
 const LIMBUS_INNER_SQUARED: f32 = (IRIS_RADIUS_PX - 1.2) * (IRIS_RADIUS_PX - 1.2);
 const GLINT_RADIUS_SQUARED: f32 = GLINT_RADIUS_PX * GLINT_RADIUS_PX;
+const EVIL_BLOOM_OUTER_SQUARED: f32 =
+    (IRIS_RADIUS_PX + EVIL_BLOOM_PX) * (IRIS_RADIUS_PX + EVIL_BLOOM_PX);
 
 impl Eye {
     fn new(pose: &Pose, index: usize) -> Self {
@@ -100,9 +121,12 @@ impl Eye {
         // Screen y grows downwards while gaze y is up.
         let iris = centre + Vec2::new(gaze.x * TRAVEL_PX.x, -gaze.y * TRAVEL_PX.y);
         let pupil_radius = lerp(PUPIL_RADIUS_PX.0, PUPIL_RADIUS_PX.1, unit(pose.dilation));
-        let closure = unit(pose.blink).max(squint);
+        let brow = unit(pose.brow);
+        let closure = unit(pose.blink).max(squint).max(brow * EVIL_NARROWING);
         // Screen-left eye's nose side is +x, the other eye's is -x; the lid drops on the nose side.
-        let tilt = if index == 0 { 1.0 } else { -1.0 } * squint * SQUINT_TILT_PX;
+        let towards_nose = if index == 0 { 1.0 } else { -1.0 };
+        let tilt = towards_nose * squint * SQUINT_TILT_PX;
+        let brow_tilt = towards_nose * brow * EVIL_TILT_PX;
         // The lids follow the sclera's elliptical outline when open and converge on the meeting line as
         // they close; with `closure` 0 the visible region is exactly the ellipse.
         let opening = 1.0 - closure;
@@ -118,7 +142,9 @@ impl Eye {
             };
             Column {
                 across,
-                upper_lid: meet - (SCLERA.y + meet) * opening * height + tilt * across,
+                upper_lid: meet - (SCLERA.y + meet) * opening * height
+                    + tilt * across
+                    + (brow_tilt * across).max(0.0),
                 lower_lid: meet + (SCLERA.y - meet) * opening * height,
                 from_iris_x: pixel_x - iris.x,
             }
@@ -129,6 +155,7 @@ impl Eye {
             pupil_radius,
             pupil_radius_squared: pupil_radius * pupil_radius,
             glint: GLINT_OFFSET * pupil_radius,
+            evil: pose.look == Look::Evil,
             columns,
         }
     }
@@ -145,15 +172,39 @@ impl Eye {
 
         let from_iris = Vec2::new(column.from_iris_x, row_centre - self.iris_y);
         let iris_distance_squared = from_iris.x * from_iris.x + from_iris.y * from_iris.y;
+        let colour = if self.evil {
+            self.evil_colour(column, offset_y, iris_distance_squared)
+        } else {
+            match self.normal_colour(column, offset_y, from_iris, iris_distance_squared) {
+                Shade::Lit(colour) => colour,
+                Shade::Unshadowed(colour) => return colour,
+            }
+        };
+        if offset_y - column.upper_lid < LID_SHADOW_PX {
+            dim(colour, 0.55)
+        } else {
+            colour
+        }
+    }
+
+    fn normal_colour(
+        &self,
+        column: &Column,
+        offset_y: f32,
+        from_iris: Vec2,
+        iris_distance_squared: f32,
+    ) -> Shade {
         if iris_distance_squared < self.pupil_radius_squared {
             let glint = from_iris - self.glint;
-            return if glint.x * glint.x + glint.y * glint.y < GLINT_RADIUS_SQUARED {
-                GLINT
-            } else {
-                Rgb888::BLACK
-            };
+            return Shade::Unshadowed(
+                if glint.x * glint.x + glint.y * glint.y < GLINT_RADIUS_SQUARED {
+                    GLINT
+                } else {
+                    Rgb888::BLACK
+                },
+            );
         }
-        let colour = if iris_distance_squared >= IRIS_RADIUS_SQUARED {
+        Shade::Lit(if iris_distance_squared >= IRIS_RADIUS_SQUARED {
             // Darken towards the rim so the eyeball reads as a sphere.
             let down = offset_y / SCLERA.y;
             let rim = column.across * column.across + down * down;
@@ -164,13 +215,38 @@ impl Eye {
             let t = (sqrtf(iris_distance_squared) - self.pupil_radius)
                 / (IRIS_RADIUS_PX - self.pupil_radius);
             mix(IRIS_INNER, IRIS_OUTER, t)
-        };
-        if offset_y - column.upper_lid < LID_SHADOW_PX {
-            dim(colour, 0.55)
-        } else {
-            colour
-        }
+        })
     }
+
+    fn evil_colour(&self, column: &Column, offset_y: f32, iris_distance_squared: f32) -> Rgb888 {
+        if iris_distance_squared < self.pupil_radius_squared {
+            let t = sqrtf(iris_distance_squared) / self.pupil_radius;
+            return mix(EVIL_PUPIL_CORE, EVIL_PUPIL_EDGE, t);
+        }
+        if iris_distance_squared < LIMBUS_INNER_SQUARED {
+            let t = (sqrtf(iris_distance_squared) - self.pupil_radius)
+                / (IRIS_RADIUS_PX - self.pupil_radius);
+            return mix(EVIL_IRIS_INNER, EVIL_IRIS_OUTER, t);
+        }
+        if iris_distance_squared < IRIS_RADIUS_SQUARED {
+            return EVIL_LIMBUS;
+        }
+        let down = offset_y / SCLERA.y;
+        let rim = (column.across * column.across + down * down).min(1.0);
+        let mut red =
+            EVIL_SCLERA_CENTRE_RED + (EVIL_SCLERA_RIM_RED - EVIL_SCLERA_CENTRE_RED) * rim * rim;
+        if iris_distance_squared < EVIL_BLOOM_OUTER_SQUARED {
+            let bloom = 1.0 - (sqrtf(iris_distance_squared) - IRIS_RADIUS_PX) / EVIL_BLOOM_PX;
+            red += EVIL_BLOOM_RED * bloom * bloom;
+        }
+        Rgb888::new(red.min(255.0) as u8, 0, 0)
+    }
+}
+
+/// A shaded pixel, and whether the lid's shadow may darken it (the pupil's glint and black stay as are).
+enum Shade {
+    Lit(Rgb888),
+    Unshadowed(Rgb888),
 }
 
 /// Poses come from the state machine and are always finite, but a renderer must never panic or smear

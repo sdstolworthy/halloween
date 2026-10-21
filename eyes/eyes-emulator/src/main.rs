@@ -11,7 +11,7 @@ use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::prelude::*;
 use embedded_graphics::text::Text;
 use eyes_core::layout::{PANEL_HEIGHT, PANEL_WIDTH};
-use eyes_core::{Eyes, EyesConfig, Pose, Reading, SplitMix64};
+use eyes_core::{Eyes, EyesConfig, Look, Pose, Reading, SplitMix64};
 use eyes_render::Framebuffer;
 
 /// Each LED becomes a `LED_PX` square with a one-pixel dark gap, like the real panel up close.
@@ -24,7 +24,8 @@ const FRAME_MS: u64 = 33;
 const BACKGROUND: Rgb888 = Rgb888::new(12, 12, 16);
 
 /// Snapshot times (ms) and what the sensor reports at each moment of the script: idle for 3 s, then a
-/// visitor walks from 4 m to 0.3 m over 8 s, lingers, and leaves.
+/// visitor walks from 4 m to 0.3 m over 8 s, lingers, and leaves. The house goes into scare mode during
+/// the walk and back to normal after it.
 const SNAPSHOTS_MS: [u64; 10] = [
     1_000, 3_000, 4_000, 6_000, 8_000, 10_000, 11_000, 13_000, 15_500, 17_500,
 ];
@@ -37,6 +38,10 @@ fn reading_at(now_ms: u64) -> Reading {
         _ => Reading::Nobody,
     }
 }
+
+/// When the scare automation would publish `evil` and `normal`.
+const EVIL_FROM_MS: u64 = 5_000;
+const NORMAL_FROM_MS: u64 = 14_000;
 
 fn describe(reading: Reading) -> String {
     match reading {
@@ -56,12 +61,19 @@ fn scenario() -> Vec<(String, Pose)> {
             if now_ms % 100 < FRAME_MS {
                 eyes.observe(reading_at(now_ms), now_ms);
             }
+            if (EVIL_FROM_MS..EVIL_FROM_MS + FRAME_MS).contains(&now_ms) {
+                eyes.request_look(Look::Evil, now_ms);
+            }
+            if (NORMAL_FROM_MS..NORMAL_FROM_MS + FRAME_MS).contains(&now_ms) {
+                eyes.request_look(Look::Normal, now_ms);
+            }
             pose = eyes.tick(now_ms);
         }
         let label = format!(
-            "t={:.1}s  {}  {:?}",
+            "t={:.1}s  {}  {:?} {:?}",
             now_ms as f32 / 1000.0,
             describe(reading_at(now_ms)),
+            pose.look,
             eyes.mode()
         );
         snapshots.push((label, pose));
@@ -181,6 +193,18 @@ mod tests {
             false, false, true, true, true, true, true, true, false, false,
         ];
         assert_eq!(modes, want);
+    }
+
+    #[test]
+    fn scenario_turns_evil_during_the_walk() {
+        let evil: Vec<bool> = scenario()
+            .iter()
+            .map(|(_, pose)| pose.look == Look::Evil)
+            .collect();
+        let want = [
+            false, false, false, true, true, true, true, true, false, false,
+        ];
+        assert_eq!(evil, want);
     }
 
     #[test]

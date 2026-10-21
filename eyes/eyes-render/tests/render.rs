@@ -1,7 +1,7 @@
 use embedded_graphics::pixelcolor::{Rgb565, Rgb888};
 use embedded_graphics::prelude::*;
 use eyes_core::geometry::{gaze_angles, gaze_point};
-use eyes_core::{EyesConfig, Pose, Vec2};
+use eyes_core::{EyesConfig, Look, Pose, Vec2};
 use eyes_render::{draw, Framebuffer};
 
 fn render(pose: &Pose) -> Framebuffer {
@@ -264,6 +264,99 @@ fn golden_frames() {
             },
             0xB5C2_1129,
         ),
+    ];
+    let mismatches: Vec<String> = cases
+        .iter()
+        .filter_map(|(name, pose, want)| {
+            let got = fnv1a(&render(pose));
+            (got != *want).then(|| format!("{name}: 0x{got:08X}"))
+        })
+        .collect();
+    assert!(mismatches.is_empty(), "golden mismatch: {mismatches:?}");
+}
+
+fn evil(pose: Pose) -> Pose {
+    Pose {
+        look: Look::Evil,
+        brow: 1.0,
+        ..pose
+    }
+}
+
+#[test]
+fn evil_eyes_have_a_dark_red_sclera_and_a_glowing_red_pupil() {
+    let framebuffer = render(&evil(Pose::RESTING));
+    let sclera = framebuffer.pixel(50, 32);
+    let pupil = framebuffer.pixel(32, 32);
+    let dark_red = sclera.r() > 0 && sclera.r() < 100 && sclera.g() == 0 && sclera.b() == 0;
+    let glowing = pupil.r() > 200 && pupil.r() > pupil.g();
+    assert!(dark_red && glowing, "sclera {sclera:?} pupil {pupil:?}");
+}
+
+#[test]
+fn the_evil_brow_lowers_the_inner_corners_without_lifting_the_outer_ones() {
+    let normal = render(&Pose::RESTING);
+    let scowl = render(&evil(Pose::RESTING));
+    let top_lit_row = |framebuffer: &Framebuffer, x: u32| {
+        (0..64)
+            .find(|&y| framebuffer.pixel(x, y) != Rgb888::BLACK)
+            .unwrap_or(64)
+    };
+    // Screen-left eye: inner (nose) corner on the right; the right eye mirrors it.
+    let inner_lowered = top_lit_row(&scowl, 50) > top_lit_row(&scowl, 14)
+        && top_lit_row(&scowl, 77) > top_lit_row(&scowl, 113);
+    let outer_not_lifted = top_lit_row(&scowl, 14) >= top_lit_row(&normal, 14)
+        && top_lit_row(&scowl, 113) >= top_lit_row(&normal, 113);
+    assert!(inner_lowered && outer_not_lifted);
+}
+
+#[test]
+fn evil_eyes_draw_less_current_than_normal_ones() {
+    // Total channel intensity is proportional to the panel's LED current at a given brightness.
+    let intensity = |framebuffer: &Framebuffer| -> u32 {
+        framebuffer
+            .pixels()
+            .iter()
+            .map(|pixel| u32::from(pixel.r()) + u32::from(pixel.g()) + u32::from(pixel.b()))
+            .sum()
+    };
+    let config = EyesConfig::DEFAULT;
+    let poses = [0.4, 1.5, 3.0].map(|distance_m| Pose {
+        gaze: gaze_angles(&config, distance_m)
+            .map(|angles| gaze_point(angles, config.max_gaze_deg)),
+        dilation: 1.0,
+        ..Pose::RESTING
+    });
+    for pose in poses {
+        let (normal, scary) = (intensity(&render(&pose)), intensity(&render(&evil(pose))));
+        assert!(scary < normal, "evil {scary} vs normal {normal}");
+    }
+}
+
+#[test]
+fn a_non_finite_brow_renders_without_panicking() {
+    let pose = Pose {
+        brow: f32::NAN,
+        ..evil(Pose::RESTING)
+    };
+    assert!(lit(&render(&pose)) > 0);
+}
+
+/// Evil goldens are separate from the normal ones above, which must never change for evil-mode work.
+#[test]
+fn evil_golden_frames() {
+    let config = EyesConfig::DEFAULT;
+    let tracking = |distance_m: f32, brow: f32| Pose {
+        gaze: gaze_angles(&config, distance_m)
+            .map(|angles| gaze_point(angles, config.max_gaze_deg)),
+        dilation: 0.7,
+        look: Look::Evil,
+        brow,
+        ..Pose::RESTING
+    };
+    let cases = [
+        ("evil, visitor at 1.5 m", tracking(1.5, 1.0), 0x53EA_71F5),
+        ("evil, brow half formed", tracking(1.5, 0.5), 0x2AC9_2259),
     ];
     let mismatches: Vec<String> = cases
         .iter()
