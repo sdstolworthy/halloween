@@ -26,7 +26,7 @@ step "firmware: cargo +esp build --release"
 export_esp="${ESP_EXPORT:-$HOME/export-esp.sh}"
 # Captured first: `grep -q` exits at the first match, and under pipefail the writer's SIGPIPE would make
 # the pipeline fail and silently skip the firmware build.
-toolchains="$(rustup toolchain list)"
+toolchains="$(rustup toolchain list 2>/dev/null || true)"
 if [[ -f "$export_esp" ]] && grep -q '^esp' <<<"$toolchains"; then
   # shellcheck source=/dev/null
   source "$export_esp"
