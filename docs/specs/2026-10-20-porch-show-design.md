@@ -8,8 +8,8 @@ When someone walks up the narrow front walkway and comes within a set distance o
 together: the skeleton string dances, the WLED lights switch to a scare preset, and a witch video is projected onto
 the door. Home Assistant (HA) orchestrates; each device does one job and knows nothing about the others.
 
-Out of scope for now: the animated eyes on the 128x64 HUB75 matrix (they will later consume the porch sensor's
-distance, built on either ESPHome or the flightpanel HUB75 driver), and any time-of-day or presence gating on the
+Out of scope for now: the animated eyes on the 128x64 HUB75 matrix (since built on the flightpanel HUB75 driver
+approach; see [the tracking eyes spec](2026-10-20-tracking-eyes-design.md)), and any time-of-day or presence gating on the
 automation (the user will add that in HA after testing).
 
 ## Architecture

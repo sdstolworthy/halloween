@@ -1,0 +1,13 @@
+# Only what the Dockerfile copies.
+**
+!Cargo.toml
+!Cargo.lock
+!nginx.conf
+!eyes-core/
+!eyes-render/
+!eyes-hal/
+!eyes-emulator/
+!eyes-web/
+eyes-emulator/out/
+eyes-web/web/eyes_web.wasm
+**/target/
