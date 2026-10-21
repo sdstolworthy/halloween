@@ -33,8 +33,8 @@ node eyes-web/web/smoke.mjs           # wasm renders the same pixels as the host
 cd eyes-web/web && python3 -m http.server 8080
 ```
 
-Move the visitor (slider, or drag them in the top-down view), press **Walk up to the door**, or untick
-**Sensor online** to watch the stale timeout. Distances are sent exactly as porch-sensor sends them (two
+Move the visitor (slider, or drag them in the top-down view), press **Walk up to the door**, untick
+**Sensor online** to watch the stale timeout, or slow the simulation down with **Speed**. Distances are sent exactly as porch-sensor sends them (two
 decimals, or `none` at and beyond 4.5 m) and parsed by the device's own code. Change the installation
 geometry and the page shows the per-eye angles and the full JSON to publish. The whole setup is kept in
 the URL, so you can share a link to it.
@@ -130,6 +130,12 @@ mosquitto_pub -h 10.0.0.84 -u <user> -P <password> -r -t halloween/eyes/config \
 The coordinate frame: origin on the ground under the sensor, +y down the walkway towards the street (where
 visitors come from), +z up, and +x to the **right** when standing at the sensor looking down the walkway,
 which is the approaching visitor's **left**. The emulator's top-down view labels +x and both ends.
+
+Blinks ride the eye movements: when idle, each glance of 10° or more carries a blink that closes just
+after the eyes start moving and reopens just before they land (smaller glances don't blink, and the eyes
+never go 6 s without one). While tracking, routine blinks wait until the gaze is still, and the startled
+blink on noticing someone rides the move towards them. The emulator's **Speed** control (down to 0.1×)
+slows the simulation so you can watch this.
 
 Readings are debounced: the eyes notice someone after two consecutive in-range readings and let go after
 half a second of `none` (or the stale timeout with no readings at all). The broker accounts for `porch-sensor` and the eyes are created in the homeassistant repo.

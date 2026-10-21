@@ -99,8 +99,36 @@ go idle, so a later visitor never inherits it.
 - **Idle** otherwise (nobody, out of range, or the sensor/broker went quiet): stare where the visitor was
   for 1.5 s, then wander to a random point every 1–3.5 s (25% of glances return to centre) on a lazier
   spring (ω = 6).
-- **Blinks** in both modes: 240 ms (close 70, hold 50, open 120), every 2.5–6 s idle or 2–5 s tracking,
-  15% double blinks, plus a startled blink the moment a visitor is noticed (at most one per 3 s).
+- **Blinks ride the eye movements** (from an animator's note: the lid closes during a saccade, hiding the
+  motion, and reopens just before the eye lands).
+  - **Idle:** an idle glance of at least **10°** (`SACCADE_THRESHOLD_DEG`; capped at 40% of
+    `max_gaze_deg` so a narrow gaze range still blinks) is a saccade with a coupled blink. Gaze-evoked
+    blinks become likely for head-fixed saccades of roughly 10° and up; smaller corrective glances don't
+    blink. There are no free-running idle blinks. If 6 s pass without one (`MAX_DWELL_MS`), the next
+    glance is forced to the other side (≥ 0.45 of the disc), which always carries a blink.
+  - **Coupled timeline**, derived from the spring rather than fixed milliseconds. Released from rest, a
+    critically damped spring has covered `p(t) = 1 − (1 + ωt)e^(−ωt)` of its move, and the lid events sit
+    at fixed points on that curve (`eyes-core/src/blink.rs`):
+
+    | Lid event | Move covered | ωt | idle (ω = 6) | acquisition (ω = 14) |
+    | --- | --- | --- | --- | --- |
+    | starts closing | 12% | 0.59 | 98 ms | 42 ms |
+    | fully closed | 48% | 1.62 | 269 ms | 115 ms |
+    | fully open | 88% | 3.66 | 610 → 548 ms (clamped) | 261 ms |
+    | gaze settled | 95% | 4.74 | 790 ms | 339 ms |
+
+    The whole blink is clamped to **150–450 ms**, since human blinks run ~100–400 ms and gaze-evoked ones
+    longer, with its start kept fixed. The lazy idle spring therefore reopens a little early: at 84% of
+    the move, still before it settles. A very stiff spring would get a blink that slightly outlasts the
+    move rather than a twitch. Retuning ω moves every point with it; a test checks the timeline halves
+    when ω doubles.
+  - **Tracking:** routine blinks every 2–5 s (15% doubles), each 240 ms (close 70, hold 50, open 120),
+    but never while the gaze is moving. The gaze counts as moving while either eye's spring is faster than
+    0.2 disc/s or further than 0.04 from its target (sensor jitter at walking distance stays well under
+    both). A due blink waits until the gaze settles.
+  - **Acquisition:** the startled blink on noticing a visitor uses the same coupled timeline on the
+    tracking spring (closes after the eyes start towards the visitor, reopens before they land), still at
+    most once per 3 s.
 - **Pupils** dilate as the visitor approaches (0 at max range, 1 at 0.3 m; idle 0.35), with a 0.35 s lag.
 - **Suspicion**: inside 1 m the lids narrow (up to 40% closed at 0.4 m) and tilt into a frown.
 - Frame times are clamped to 250 ms so a stall resumes timers instead of skipping them; a clock that steps
