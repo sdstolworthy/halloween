@@ -21,6 +21,7 @@ const LABEL_PX: u32 = 14;
 const TILE_W: u32 = PANEL_WIDTH * LED_PX;
 const TILE_H: u32 = PANEL_HEIGHT * LED_PX + LABEL_PX;
 const FRAME_MS: u64 = 33;
+const BACKGROUND: Rgb888 = Rgb888::new(12, 12, 16);
 
 /// Snapshot times (ms) and what the sensor reports at each moment of the script: idle for 3 s, then a
 /// visitor walks from 4 m to 0.3 m over 8 s, lingers, and leaves.
@@ -79,7 +80,7 @@ impl Sheet {
         Self {
             width,
             height,
-            pixels: vec![Rgb888::new(12, 12, 16); (width * height) as usize],
+            pixels: vec![BACKGROUND; (width * height) as usize],
         }
     }
 
@@ -159,4 +160,64 @@ fn main() -> std::io::Result<()> {
     )?;
     println!("wrote {}", path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scenario_has_one_snapshot_per_time() {
+        assert_eq!(scenario().len(), SNAPSHOTS_MS.len());
+    }
+
+    #[test]
+    fn scenario_tracks_during_the_walk_and_idles_before_and_after() {
+        let modes: Vec<bool> = scenario()
+            .iter()
+            .map(|(label, _)| label.ends_with("Tracking"))
+            .collect();
+        let want = [
+            false, false, true, true, true, true, true, true, false, false,
+        ];
+        assert_eq!(modes, want);
+    }
+
+    #[test]
+    fn readings_follow_the_script() {
+        let cases = [
+            (0, Reading::Nobody),
+            (3_000, Reading::Distance(4.0)),
+            (11_000, Reading::Distance(0.3)),
+            (14_000, Reading::Nobody),
+        ];
+        for (now_ms, want) in cases {
+            assert_eq!(reading_at(now_ms), want, "{now_ms}");
+        }
+    }
+
+    #[test]
+    fn paste_draws_each_led_as_a_dot_with_a_gap() {
+        let mut panel = Framebuffer::new();
+        Pixel(Point::new(1, 0), Rgb888::RED)
+            .draw(&mut panel)
+            .unwrap();
+        let mut sheet = Sheet::new(TILE_W, TILE_H);
+        sheet.paste(&panel, Point::zero());
+        let at = |x: u32, y: u32| sheet.pixels[(y * sheet.width + x) as usize];
+        // LED (1, 0) covers sheet x 4..7, y 0..3; x 7 is the gap.
+        assert_eq!(
+            (at(4, 0), at(6, 2), at(7, 0)),
+            (Rgb888::RED, Rgb888::RED, BACKGROUND)
+        );
+    }
+
+    #[test]
+    fn sheet_clips_and_exports_rgb() {
+        let mut sheet = Sheet::new(2, 1);
+        Pixel(Point::new(5, 5), Rgb888::WHITE)
+            .draw(&mut sheet)
+            .unwrap();
+        assert_eq!(sheet.rgb(), [12, 12, 16, 12, 12, 16]);
+    }
 }
