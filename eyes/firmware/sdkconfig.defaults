@@ -1,0 +1,22 @@
+# The render loop runs on the main task; pin it to core 1 so Wi-Fi and lwIP (core 0) never steal frame time.
+CONFIG_ESP_MAIN_TASK_AFFINITY_CPU1=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=12288
+
+# 1 ms scheduler tick so a 33 ms frame sleep is 33 ms, not rounded to the default 10 ms tick.
+CONFIG_FREERTOS_HZ=1000
+
+CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y
+
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Internal RAM is the scarce resource: the HUB75 DMA buffers want ~2 x 64 KiB of it. The eyes only move a
+# few small MQTT messages, so trim Wi-Fi's buffers (Espressif's documented RAM levers).
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
+
+# Build the HUB75 library in pure ESP-IDF mode (no Arduino / Adafruit-GFX dependency).
+CONFIG_ESP32_HUB75_USE_GFX=n

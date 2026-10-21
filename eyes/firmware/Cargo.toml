@@ -1,0 +1,49 @@
+[package]
+name = "eyes-firmware"
+version = "0.1.0"
+edition = "2021"
+resolver = "2"
+rust-version = "1.77"
+license = "MIT"
+
+# Own workspace root: this only builds with the ESP-IDF toolchain (`cargo +esp`), so the host workspace
+# one level up excludes it.
+[workspace]
+
+[[bin]]
+name = "eyes-firmware"
+harness = false # no host test harness; the testable logic lives in eyes-core/eyes-render/eyes-hal
+
+[dependencies]
+eyes-core = { path = "../eyes-core" }
+eyes-hal = { path = "../eyes-hal" }
+embedded-graphics = "0.8"
+# Same versions flight-rs builds against ESP-IDF v5.3.x with the `esp` toolchain.
+esp-idf-svc = "0.52"
+esp-idf-sys = "0.37"
+log = "0.4"
+anyhow = "1"
+
+[build-dependencies]
+embuild = "0.33"
+# build.rs validates the provisioned [eyes] defaults with the device's own config rules.
+eyes-core = { path = "../eyes-core" }
+serde_json = "1"
+toml = "0.9"
+
+# HUB75 driver: mrcodetastic's ESP32-HUB75-MatrixPanel-DMA ESP-IDF component, from git because the
+# author stopped publishing to the component registry. Must match components/matrix_shim/idf_component.yml.
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "mrcodetastic/esp32-hub75-matrixpanel-i2s-dma", version = "3.0.11", git = "https://github.com/mrcodetastic/ESP32-HUB75-MatrixPanel-DMA.git" }
+
+# The C shim matrix.rs calls over FFI. A local path dependency (not `component_dirs`) so the generated
+# `main` component REQUIRES it and the linker keeps its archive.
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "matrix_shim", version = "*", path = "${PROJECT_DIR}/components/matrix_shim" }
+
+[profile.release]
+opt-level = "s"
+debug = true # symbols stay in the ELF for backtraces; they are not flashed
+
+[profile.dev]
+opt-level = "z"

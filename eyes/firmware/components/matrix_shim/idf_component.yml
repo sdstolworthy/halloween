@@ -1,0 +1,16 @@
+# Managed dependency: the mrcodetastic HUB75 I2S-DMA driver. Sourced from git —
+# the author renamed the repo (ESP32-HUB75-MatrixPanel-I2S-DMA →
+# ESP32-HUB75-MatrixPanel-DMA) and stopped publishing to the ESP Component
+# Registry, so the `mrcodetastic` namespace 404s there. The component manager
+# clones the repo at the `version` git ref and makes its header
+# (ESP32-HUB75-MatrixPanel-I2S-DMA.h, unchanged across the rename) available to
+# matrix_shim.cpp, auto-adding it to this component's REQUIRES.
+#
+# Kept in sync with Cargo.toml's [[package.metadata.esp-idf-sys.extra_components]]
+# (same key, git url, and ref) so both the `main` and `matrix_shim` components
+# resolve to the one managed component.
+dependencies:
+  idf: ">=5.1"
+  mrcodetastic/esp32-hub75-matrixpanel-i2s-dma:
+    git: https://github.com/mrcodetastic/ESP32-HUB75-MatrixPanel-DMA.git
+    version: "3.0.11"

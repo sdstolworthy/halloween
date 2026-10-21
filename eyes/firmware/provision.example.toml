@@ -1,0 +1,20 @@
+# Copy to provision.toml (gitignored) and fill in. build.rs bakes these into the firmware image, so
+# rebuild after editing. Without a provision.toml the eyes still run, idle and offline.
+
+[wifi]
+ssid = "your-network"
+password = "your-wifi-password"
+
+[mqtt]
+url = "mqtt://10.0.0.84:1883"
+username = "halloween-eyes"
+password = "your-mqtt-password"
+
+# Defaults for any of the config keys (see eyes/README.md). The retained halloween/eyes/config topic is
+# merged over these at runtime, so these only need to be roughly right. Omitted keys use the built-in
+# defaults; invalid values fail the build.
+[eyes]
+eyes_offset_x_m = 0.6
+eyes_offset_y_m = -0.3
+eyes_height_m = 1.5
+brightness = 64
