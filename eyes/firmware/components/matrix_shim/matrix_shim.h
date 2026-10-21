@@ -41,6 +41,10 @@ void hub75_draw_pixel(int32_t x, int32_t y, uint8_t r, uint8_t g, uint8_t b);
 // live, and clearing would blank the visible image.
 void hub75_flip_and_clear(void);
 
+// Double-buffer mode: present the back buffer without clearing the next one, for callers that repaint
+// every pixel each frame (added for the eyes; not in flight-rs). Single-buffer mode: no-op.
+void hub75_flip(void);
+
 // Global brightness, 0..=255.
 void hub75_set_brightness(uint8_t level);
 

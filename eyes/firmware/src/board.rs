@@ -1,6 +1,10 @@
-//! The ESP32-WROOM-32 HUB75 wiring, identical to flight-rs's `board/wroom32.rs` (see
-//! flight-rs firmware/ESP32_WROOM32.md for the ribbon-by-ribbon table). Confirm against the panel's
-//! silkscreen before flashing; a wrong pin only garbles the image.
+//! The ESP32-WROOM-32 HUB75 wiring, identical to flight-rs's `board/wroom32.rs`. The ribbon-by-ribbon
+//! table and wiring warnings are in eyes/README.md. Confirm against the panel's silkscreen before
+//! flashing; a wrong signal pin only garbles the image.
+//!
+//! GPIO12 (G2) is a strapping pin that selects the flash voltage and must read low at reset: if the board
+//! won't boot or flash with the panel attached, unplug the ribbon to confirm. GPIO5 and GPIO15 are also
+//! strapping pins, but their default states are compatible with normal boot here.
 
 use crate::matrix::Hub75Pins;
 

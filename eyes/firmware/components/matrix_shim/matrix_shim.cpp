@@ -61,6 +61,12 @@ void hub75_flip_and_clear(void) {
     }
 }
 
+void hub75_flip(void) {
+    if (s_panel != nullptr && s_double_buff) {
+        s_panel->flipDMABuffer();
+    }
+}
+
 void hub75_set_brightness(uint8_t level) {
     if (s_panel != nullptr) {
         s_panel->setBrightness8(level);

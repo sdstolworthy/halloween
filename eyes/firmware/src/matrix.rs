@@ -45,8 +45,8 @@ mod ffi {
             double_buff: bool,
         ) -> i32;
         pub fn hub75_draw_pixel(x: i32, y: i32, r: u8, g: u8, b: u8);
-        /// Double buffer: present the back buffer and clear the new one. Single buffer: no-op.
-        pub fn hub75_flip_and_clear();
+        /// Double buffer: present the back buffer without clearing the new one. Single buffer: no-op.
+        pub fn hub75_flip();
         pub fn hub75_set_brightness(level: u8);
     }
 }
@@ -118,9 +118,11 @@ impl DrawTarget for Hub75Matrix {
 
 impl Matrix for Hub75Matrix {
     fn flush(&mut self) -> Result<(), Self::Error> {
+        // No clear after the flip: the renderer writes every pixel of every frame, so clearing would only
+        // cost a full extra pass over the DMA buffer.
         if self.config.double_buffer {
             // SAFETY: no arguments; flips the DMA buffers.
-            unsafe { ffi::hub75_flip_and_clear() };
+            unsafe { ffi::hub75_flip() };
         }
         Ok(())
     }

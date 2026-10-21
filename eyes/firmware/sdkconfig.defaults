@@ -1,5 +1,15 @@
-# The render loop runs on the main task; pin it to core 1 so Wi-Fi and lwIP (core 0) never steal frame time.
+# The default 160 MHz leaves too little margin for shading and pushing 8192 pixels per frame.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# The render loop runs on the main task, pinned to core 1. Everything networked is pinned to core 0 so it
+# can never preempt a frame: Wi-Fi (its default), lwIP's tcpip task, esp-mqtt's task, and the network
+# thread (pinned in net.rs). Pinning keeps the render loop at its default priority instead of raising it
+# above the networking tasks, which could starve them while a frame runs long.
 CONFIG_ESP_MAIN_TASK_AFFINITY_CPU1=y
+CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0=y
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
+CONFIG_MQTT_TASK_CORE_SELECTION_ENABLED=y
+CONFIG_MQTT_USE_CORE_0=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=12288
 
 # 1 ms scheduler tick so a 33 ms frame sleep is 33 ms, not rounded to the default 10 ms tick.

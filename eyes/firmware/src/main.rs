@@ -19,7 +19,7 @@ use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use eyes_core::layout::{PANEL_HEIGHT, PANEL_WIDTH};
 use eyes_core::SplitMix64;
 use eyes_hal::App;
-use log::info;
+use log::{error, info};
 
 use crate::clock::EspClock;
 use crate::matrix::Hub75Matrix;
@@ -29,7 +29,14 @@ use crate::provision::Provisioning;
 /// smoothly the gaze moves; 30 fps is smooth for spring motion and leaves most of core 1 idle. Each frame
 /// shades and pushes all 8192 pixels; the stats log shows the real cost so 60 fps can be tried on the bench.
 const FRAME_PERIOD: Duration = Duration::from_millis(33);
+// Wi-Fi, lwIP, esp-mqtt and the network thread are pinned to core 0 (sdkconfig.defaults, net.rs), so this
+// loop shares core 1 only with the panel's DMA interrupt, which begin() registered here.
 const STATS_PERIOD: Duration = Duration::from_secs(30);
+/// Never sleep less than one FreeRTOS tick, even when a frame runs over, so IDLE1 runs and feeds the task
+/// watchdog.
+const MIN_SLEEP: Duration = Duration::from_millis(1);
+/// Long enough to read the reason on the serial console, short enough to recover by itself.
+const RESTART_DELAY: Duration = Duration::from_secs(10);
 
 fn main() -> anyhow::Result<()> {
     esp_idf_svc::sys::link_patches();
@@ -43,7 +50,10 @@ fn main() -> anyhow::Result<()> {
 
     // The matrix first, while internal RAM is still one unfragmented region: the DMA framebuffers are the
     // largest allocations on the board.
-    let matrix = Hub75Matrix::new(PANEL_WIDTH, PANEL_HEIGHT, board::WROOM32_PINS)?;
+    let matrix = match Hub75Matrix::new(PANEL_WIDTH, PANEL_HEIGHT, board::WROOM32_PINS) {
+        Ok(matrix) => matrix,
+        Err(reason) => restart_after(RESTART_DELAY, &reason),
+    };
     log_heap("after HUB75");
     let inbox = net::start(peripherals.modem, sysloop, nvs, &provisioning);
 
@@ -63,13 +73,20 @@ fn main() -> anyhow::Result<()> {
 
         next_frame += FRAME_PERIOD;
         let now = Instant::now();
-        if next_frame > now {
-            std::thread::sleep(next_frame - now);
-        } else {
+        if next_frame <= now {
             // Running late: start the next frame now rather than trying to catch up with a burst.
             next_frame = now;
         }
+        std::thread::sleep((next_frame - now).max(MIN_SLEEP));
     }
+}
+
+/// Nothing works without the panel; a fresh boot (with an unfragmented heap) is the best retry.
+fn restart_after(delay: Duration, reason: &anyhow::Error) -> ! {
+    error!("{reason:#}; restarting in {}s", delay.as_secs());
+    std::thread::sleep(delay);
+    // SAFETY: plain system call; it does not return.
+    unsafe { esp_idf_svc::sys::esp_restart() }
 }
 
 fn hardware_seed() -> u64 {
@@ -120,6 +137,10 @@ impl FrameStats {
                 self.overruns
             );
             log_heap("now");
+            // SAFETY: a null handle means the calling task (the render loop).
+            let unused =
+                unsafe { esp_idf_svc::sys::uxTaskGetStackHighWaterMark(std::ptr::null_mut()) };
+            info!("render loop stack: {unused} B never used");
             *self = Self::default();
         }
     }

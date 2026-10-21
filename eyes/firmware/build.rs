@@ -6,9 +6,16 @@ use toml::{Table, Value};
 
 const PROVISION_FILE: &str = "provision.toml";
 
-const SECTIONS: [(&str, &[&str]); 2] = [
-    ("wifi", &["ssid", "password"]),
-    ("mqtt", &["url", "username", "password"]),
+type Keys = &'static [(&'static str, Option<usize>)];
+
+/// Allowed keys per section, with the longest value (bytes) the firmware can hold, if limited. The Wi-Fi
+/// driver's fixed buffers would otherwise silently turn an over-long value into an empty one.
+const SECTIONS: [(&str, Keys); 2] = [
+    ("wifi", &[("ssid", Some(32)), ("password", Some(64))]),
+    (
+        "mqtt",
+        &[("url", None), ("username", None), ("password", None)],
+    ),
 ];
 
 fn main() {
@@ -41,13 +48,19 @@ fn bake_section(name: &str, value: &Value) {
         .as_table()
         .unwrap_or_else(|| panic!("{PROVISION_FILE}: [{name}] must be a table"));
     for (key, value) in table {
-        assert!(
-            allowed.contains(&key.as_str()),
-            "{PROVISION_FILE}: unknown key {name}.{key}"
-        );
+        let Some((_, max_len)) = allowed.iter().find(|(allowed_key, _)| allowed_key == key) else {
+            panic!("{PROVISION_FILE}: unknown key {name}.{key}");
+        };
         let text = value
             .as_str()
             .unwrap_or_else(|| panic!("{PROVISION_FILE}: {name}.{key} must be a string"));
+        if let Some(max_len) = max_len {
+            assert!(
+                text.len() <= *max_len,
+                "{PROVISION_FILE}: {name}.{key} is {} bytes; the most the firmware can use is {max_len}",
+                text.len()
+            );
+        }
         assert!(
             !text.contains(['\n', '\r']),
             "{PROVISION_FILE}: {name}.{key} must be a single line"
