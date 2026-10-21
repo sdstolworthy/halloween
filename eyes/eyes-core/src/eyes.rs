@@ -46,6 +46,9 @@ const SACCADE_THRESHOLD_OF_MAX_GAZE: f32 = 0.4;
 /// Idle eyes never go longer than this without a blink: when it runs out, the next glance is forced to
 /// be a saccade (which carries one). People blink every few seconds.
 const MAX_DWELL_MS: u64 = 6000;
+/// A glance takes about 0.8 s to settle on the idle spring; a forced saccade waits at most this long for
+/// it, so the dwell limit stays close to `MAX_DWELL_MS`.
+const FORCED_SACCADE_MAX_WAIT_MS: u64 = 800;
 /// A forced saccade jumps to the other side, at least this far from centre.
 const FORCED_SACCADE_REACH: (f32, f32) = (0.45, 0.75);
 
@@ -216,7 +219,7 @@ impl<R: Rng> Eyes<R> {
         let tracked = self
             .visitor_distance(now_ms)
             .and_then(|distance_m| Some((distance_m, self.tracking_targets(distance_m)?)));
-        self.update_mode(tracked.is_some(), now_ms);
+        self.update_mode(tracked.map(|(_, targets)| targets), now_ms);
         let distance_m = tracked.map(|(distance_m, _)| distance_m);
 
         let (targets, omega) = match tracked {
@@ -249,8 +252,9 @@ impl<R: Rng> Eyes<R> {
         }
     }
 
-    fn update_mode(&mut self, visitor_present: bool, now_ms: u64) {
-        let mode = if visitor_present {
+    /// `tracking_targets` is where the eyes will aim if a visitor is being tracked.
+    fn update_mode(&mut self, tracking_targets: Option<[Vec2; 2]>, now_ms: u64) {
+        let mode = if tracking_targets.is_some() {
             Mode::Tracking
         } else {
             Mode::Idle
@@ -260,12 +264,22 @@ impl<R: Rng> Eyes<R> {
                 let startle_due = self
                     .last_startle_ms
                     .is_none_or(|last_ms| now_ms.saturating_sub(last_ms) >= STARTLE_COOLDOWN_MS);
-                // The acquisition move is a saccade, so its startled blink is coupled to the move.
-                if startle_due && self.blink.is_none() {
-                    self.start_blink(Blink::during_shift(now_ms, TRACK_OMEGA));
-                    self.last_startle_ms = Some(now_ms);
+                // The acquisition move is a saccade, so its blink is coupled to the move. A blink already
+                // under way (an idle saccade's, on a slower spring) is retimed to land with the tracking
+                // gaze instead of still being shut after the eyes have arrived.
+                let targets = tracking_targets.unwrap_or_default();
+                let acquisition = Blink::during_move(now_ms, self.springs, targets, TRACK_OMEGA);
+                match self.blink {
+                    Some(blink) if !blink.is_over(now_ms) => {
+                        self.blink = Some(blink.retimed_to(now_ms, acquisition));
+                    }
+                    _ if startle_due => {
+                        self.start_blink(acquisition);
+                        self.last_startle_ms = Some(now_ms);
+                    }
+                    _ => {}
                 }
-                self.schedule_routine_blink(now_ms);
+                self.schedule_routine_blink(now_ms, false);
             }
             (Mode::Tracking, Mode::Idle) => {
                 self.held_targets = None;
@@ -292,6 +306,12 @@ impl<R: Rng> Eyes<R> {
     fn wander(&mut self, now_ms: u64) -> Vec2 {
         if now_ms >= self.next_wander_ms {
             let dwell_over = now_ms >= self.last_blink_ms + MAX_DWELL_MS;
+            // The coupled blink's timeline assumes the spring starts from rest, so a forced saccade waits
+            // for the previous glance to settle, but never more than `FORCED_SACCADE_MAX_WAIT_MS`.
+            let may_wait = now_ms < self.last_blink_ms + MAX_DWELL_MS + FORCED_SACCADE_MAX_WAIT_MS;
+            if dwell_over && self.moving && may_wait {
+                return self.wander_target;
+            }
             let target = if dwell_over {
                 self.forced_saccade_target()
             } else if self.rng.unit() < WANDER_CENTRE_CHANCE {
@@ -330,7 +350,12 @@ impl<R: Rng> Eyes<R> {
         let threshold_deg = SACCADE_THRESHOLD_DEG.min(max_gaze_deg * SACCADE_THRESHOLD_OF_MAX_GAZE);
         let is_saccade = gaze_shift_deg(self.gaze_centre(), target, max_gaze_deg) >= threshold_deg;
         if is_saccade && self.blink.is_none() {
-            self.start_blink(Blink::during_shift(now_ms, IDLE_OMEGA));
+            self.start_blink(Blink::during_move(
+                now_ms,
+                self.springs,
+                [target; 2],
+                IDLE_OMEGA,
+            ));
         }
         self.wander_target = target;
     }
@@ -344,8 +369,10 @@ impl<R: Rng> Eyes<R> {
         self.last_blink_ms = blink.start_ms;
     }
 
-    fn schedule_routine_blink(&mut self, now_ms: u64) {
-        let gap_ms = if self.rng.unit() < DOUBLE_BLINK_CHANCE {
+    /// A double blink may only follow a routine one: right after a coupled blink the gaze may still be
+    /// finishing its move.
+    fn schedule_routine_blink(&mut self, now_ms: u64, after_routine: bool) {
+        let gap_ms = if after_routine && self.rng.unit() < DOUBLE_BLINK_CHANCE {
             DOUBLE_BLINK_GAP_MS
         } else {
             seconds_to_ms(
@@ -359,10 +386,10 @@ impl<R: Rng> Eyes<R> {
     /// Idle eyes only blink with saccades. Tracking eyes also blink routinely, but never mid-move: a due
     /// blink waits until the gaze has settled.
     fn blink_closure(&mut self, now_ms: u64) -> f32 {
-        if self.blink.is_some_and(|blink| blink.is_over(now_ms)) {
+        if let Some(blink) = self.blink.filter(|blink| blink.is_over(now_ms)) {
             self.blink = None;
             if self.mode == Mode::Tracking {
-                self.schedule_routine_blink(now_ms);
+                self.schedule_routine_blink(now_ms, blink == Blink::routine(blink.start_ms));
             }
         }
         let routine_due = self.mode == Mode::Tracking
@@ -689,7 +716,9 @@ mod tests {
         eyes.observe(Reading::Distance(1.0), 900);
         eyes.observe(Reading::Distance(1.0), 1000);
         eyes.tick(1000);
-        assert_eq!(eyes.blink, Some(Blink::during_shift(1000, TRACK_OMEGA)));
+        let targets = expected_gaze(eyes.config(), 1.0);
+        let coupled = Blink::during_move(1000, [Spring::default(); 2], targets, TRACK_OMEGA);
+        assert_eq!(eyes.blink, Some(coupled));
     }
 
     /// Ticks idle eyes for a minute and returns, for each blink, whether a new glance started on the same
@@ -725,6 +754,115 @@ mod tests {
         assert!(
             longest <= MAX_DWELL_MS + FRAME_MS,
             "{longest} ms between blinks"
+        );
+    }
+
+    /// Idle eyes start a large glance (with its coupled blink) at t = 1000; a visitor 1.5 m away is then
+    /// acquired at `acquire_ms`. Returns every 5 ms from acquisition: (progress of the tracking move,
+    /// lid closure).
+    fn acquire_during_idle_blink(acquire_ms: u64) -> Vec<(f32, f32)> {
+        let mut eyes = eyes();
+        eyes.next_wander_ms = u64::MAX;
+        eyes.tick(1000);
+        eyes.shift_gaze(Vec2::new(-0.7, 0.0), 1000);
+        (1000..acquire_ms).step_by(5).for_each(|now_ms| {
+            eyes.tick(now_ms);
+        });
+        let from = eyes.springs[0].position;
+        let to = expected_gaze(eyes.config(), 1.5)[0];
+        eyes.observe(Reading::Distance(1.5), acquire_ms - 100);
+        eyes.observe(Reading::Distance(1.5), acquire_ms);
+        (acquire_ms..acquire_ms + 1000)
+            .step_by(5)
+            .map(|now_ms| {
+                if now_ms % 100 == 0 {
+                    eyes.observe(Reading::Distance(1.5), now_ms);
+                }
+                let pose = eyes.tick(now_ms);
+                let moved = pose.gaze[0] - from;
+                let whole = to - from;
+                let progress = (moved.x * whole.x + moved.y * whole.y)
+                    / (whole.x * whole.x + whole.y * whole.y);
+                (progress, pose.blink)
+            })
+            .collect()
+    }
+
+    /// Acquisition while the idle blink is closing, at its shut instant, and reopening.
+    const IDLE_BLINK_PHASES_MS: [(&str, u64); 3] =
+        [("closing", 1180), ("shut", 1269), ("reopening", 1400)];
+
+    #[test]
+    fn acquiring_mid_idle_blink_opens_the_lid_before_the_tracking_gaze_lands() {
+        for (phase, acquire_ms) in IDLE_BLINK_PHASES_MS {
+            let samples = acquire_during_idle_blink(acquire_ms);
+            let landed = samples
+                .iter()
+                .position(|(progress, _)| *progress >= 0.95)
+                .unwrap();
+            let last_closed = samples
+                .iter()
+                .rposition(|(_, closure)| *closure > 0.0)
+                .unwrap();
+            assert!(
+                last_closed < landed,
+                "{phase}: lid open at sample {last_closed}, landed at {landed}"
+            );
+        }
+    }
+
+    #[test]
+    fn acquiring_mid_idle_blink_never_makes_the_lid_jump() {
+        // The fastest legitimate lid motion is a routine blink closing in 70 ms: 5/70 per 5 ms frame.
+        for (phase, acquire_ms) in IDLE_BLINK_PHASES_MS {
+            let samples = acquire_during_idle_blink(acquire_ms);
+            let largest = samples
+                .windows(2)
+                .map(|pair| (pair[1].1 - pair[0].1).abs())
+                .fold(0.0, f32::max);
+            assert!(largest <= 0.08, "{phase}: lid moved {largest} in one frame");
+        }
+    }
+
+    #[test]
+    fn no_double_blink_follows_an_acquisition_blink() {
+        // Across many seeds (15% of which would draw a double), the blink after the acquisition one still
+        // waits the ordinary 2-5 s.
+        for seed in 1..40 {
+            let mut eyes = Eyes::new(EyesConfig::DEFAULT, SplitMix64::new(seed), 0);
+            let poses = run(&mut eyes, Some(Reading::Distance(1.5)), 0, 2000);
+            assert!(
+                blinks(&poses) <= 1,
+                "seed {seed}: {} blinks in the first 2 s",
+                blinks(&poses)
+            );
+        }
+    }
+
+    #[test]
+    fn a_forced_saccade_waits_for_the_previous_glance_to_settle() {
+        let mut eyes = eyes();
+        eyes.next_wander_ms = u64::MAX;
+        eyes.tick(5800);
+        // No blink since t = 0, and a small glance just before the dwell runs out leaves the spring moving
+        // at the deadline.
+        eyes.shift_gaze(Vec2::new(0.15, 0.0), 5800);
+        eyes.last_blink_ms = 0;
+        eyes.next_wander_ms = MAX_DWELL_MS;
+        let mut forced = None;
+        for now_ms in (5805..8000).step_by(5) {
+            let (was_moving, target) = (eyes.gaze_moving(), eyes.wander_target);
+            eyes.tick(now_ms);
+            if eyes.wander_target != target {
+                forced = Some((now_ms, was_moving));
+                break;
+            }
+        }
+        let (at_ms, was_moving) = forced.unwrap();
+        let in_time = at_ms > MAX_DWELL_MS && at_ms <= MAX_DWELL_MS + FORCED_SACCADE_MAX_WAIT_MS;
+        assert!(
+            in_time && !was_moving,
+            "forced at {at_ms} ms, moving {was_moving}"
         );
     }
 
