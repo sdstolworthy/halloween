@@ -199,6 +199,6 @@ halloween/
 
 ## Assumptions to verify during implementation
 
-- HA's MQTT integration is already connected to the Mosquitto broker.
+- ~~HA's MQTT integration is already connected to the Mosquitto broker.~~ Confirmed by the user 2026-10-20.
 - The Pi's model and OS match the above.
 - The WLED controller is already in HA via the WLED integration.
