@@ -176,7 +176,11 @@ When the house switches into scare mode, the eyes turn evil: black sclera, red p
   - If a blink that hasn't shut yet is in progress, it carries the switch. Its shut hold is stretched to
     at least 50 ms so a 30 fps frame always lands on it.
   - If the blink is already reopening, it finishes first.
-  - Otherwise a routine blink starts (70 ms close ≥ the 65 ms ramp floor, 50 ms shut, 120 ms open).
+  - Otherwise, **idle** eyes make a glance of their own (a forced saccade to the other side), so the
+    switch rides its coupled blink and idle blinks still only happen with eye movement; no other glance
+    (or blink) follows for 1 s, so it never reads as a double blink. **Tracking** eyes start a routine
+    blink (70 ms close ≥ the 65 ms ramp floor, 50 ms shut, 120 ms open); so do idle eyes in the rare case
+    the glance's blink would be too short to be natural.
   - **Exception** to "no blinking while the tracking gaze moves": a mode change blinks immediately even
     mid-move, because it's a deliberate event, not a routine blink.
   - At very low frame rates (the emulator below ~20 fps) the shut hold could fall between frames; the

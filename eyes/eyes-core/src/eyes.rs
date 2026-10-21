@@ -78,6 +78,9 @@ const SWITCH_HOLD_MS: u64 = 50;
 /// The evil brow grows in from the moment of the switch: about half formed as the lid finishes reopening
 /// (~120 ms) and complete within ~0.6 s, so the scowl forms as the eye opens instead of snapping in.
 const BROW_TAU_S: f32 = 0.2;
+/// After an idle look switch, no other glance (and so no other blink) for this long, so the switch blink
+/// never reads as the first of a double.
+const IDLE_SWITCH_QUIET_MS: u64 = 1000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -495,6 +498,9 @@ impl<R: Rng> Eyes<R> {
                 self.look = self.requested_look;
                 self.switch_carrier_ms = None;
                 self.blink_carried_switch = true;
+                if self.mode == Mode::Idle {
+                    self.next_wander_ms = self.next_wander_ms.max(now_ms + IDLE_SWITCH_QUIET_MS);
+                }
                 // Normally inside the carrier's shut hold anyway; at a very low frame rate this frame is
                 // drawn shut rather than ever showing the new palette with the lid open.
                 1.0
@@ -504,10 +510,21 @@ impl<R: Rng> Eyes<R> {
     }
 
     /// Pick the blink that will hide a pending look switch: one that hasn't shut yet (held shut long
-    /// enough for a frame to land on it), or a fresh routine blink. A blink already reopening is left to
-    /// finish first. This blinks even while a tracking gaze is moving: a change of look is a deliberate
-    /// event, unlike the routine blinks that wait for the gaze to settle.
+    /// enough for a frame to land on it), or a new one. Idle eyes only blink with eye movements, so they
+    /// make a glance (a saccade, carrying its coupled blink); tracking eyes use a routine blink, even
+    /// while the gaze is moving, since a change of look is a deliberate event. A blink already reopening
+    /// is left to finish first.
     fn choose_switch_carrier(&mut self, now_ms: u64) {
+        if self.blink.is_none() {
+            if self.mode == Mode::Idle {
+                let target = self.forced_saccade_target();
+                self.shift_gaze(target, now_ms);
+            }
+            // Also the fallback when the glance's blink would be too short to be natural.
+            if self.blink.is_none() {
+                self.start_blink(Blink::routine(now_ms));
+            }
+        }
         match self.blink {
             Some(blink) if self.switch_carrier_ms == Some(blink.start_ms) => {}
             Some(blink) if now_ms < blink.closed_ms => {
@@ -520,12 +537,7 @@ impl<R: Rng> Eyes<R> {
                 });
                 self.switch_carrier_ms = Some(blink.start_ms);
             }
-            Some(_) => {}
-            None => {
-                let blink = Blink::routine(now_ms);
-                self.start_blink(blink);
-                self.switch_carrier_ms = Some(blink.start_ms);
-            }
+            _ => {}
         }
     }
 
@@ -1216,6 +1228,39 @@ mod tests {
                 blinks(&poses) <= 1,
                 "seed {seed}: {} blinks after the switch",
                 blinks(&poses)
+            );
+        }
+    }
+
+    #[test]
+    fn an_idle_switch_rides_a_glance_and_no_other_blink_follows_within_a_second() {
+        for seed in 1..=40 {
+            let mut eyes = Eyes::new(EyesConfig::DEFAULT, SplitMix64::new(seed), 0);
+            let request_ms = 5000 + seed * 137;
+            let mut switch = None;
+            let mut later_blinks = Vec::new();
+            for now_ms in (0..request_ms + 3000).step_by(FRAME_MS as usize) {
+                if (request_ms..request_ms + FRAME_MS).contains(&now_ms) {
+                    eyes.request_look(Look::Evil, now_ms);
+                }
+                let before = eyes.blink;
+                let pose = eyes.tick(now_ms);
+                if pose.look == Look::Evil && switch.is_none() {
+                    let carrier = eyes.blink.unwrap();
+                    switch = Some((now_ms, carrier, eyes.gaze_moving()));
+                } else if let (Some((_, carrier, _)), Some(blink)) = (switch, eyes.blink) {
+                    if blink != carrier && Some(blink) != before {
+                        later_blinks.push(blink.start_ms);
+                    }
+                }
+            }
+            let (switched_ms, carrier, moving) = switch.unwrap();
+            let quiet = later_blinks
+                .iter()
+                .all(|&start_ms| start_ms >= switched_ms + 1000);
+            assert!(
+                carrier.kind == BlinkKind::Coupled && moving && quiet,
+                "seed {seed}: switch at {switched_ms} by {carrier:?} (moving {moving}), later blinks {later_blinks:?}"
             );
         }
     }
