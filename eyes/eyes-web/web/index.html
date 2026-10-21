@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Porch eyes emulator</title>
+  <meta name="description" content="See exactly what the porch eyes panel shows for a visitor at any distance, and tune the installation geometry.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="masthead">
+    <h1>Porch eyes</h1>
+    <p class="lede">The real firmware renderer, running in your browser. Move the visitor and the panel shows
+      exactly the pixels the LEDs will.</p>
+    <button id="share" type="button" class="quiet">Copy link to this setup</button>
+  </header>
+
+  <main>
+    <section class="stage" aria-label="Panel">
+      <div class="bezel">
+        <canvas id="panel" width="768" height="384" aria-label="128 by 64 LED panel"></canvas>
+      </div>
+      <div class="readout" aria-live="polite">
+        <p id="mode" class="mode">Loading the renderer…</p>
+        <table>
+          <thead><tr><th scope="col"></th><th scope="col">Yaw</th><th scope="col">Pitch</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Left eye</th><td id="yaw-0">–</td><td id="pitch-0">–</td></tr>
+            <tr><th scope="row">Right eye</th><td id="yaw-1">–</td><td id="pitch-1">–</td></tr>
+          </tbody>
+        </table>
+        <p class="hint">Angles from each eye to the visitor's face, relative to straight out of the panel.
+          Positive is towards the panel's right as you face it, and up.</p>
+      </div>
+    </section>
+
+    <section class="diagrams" aria-label="Geometry">
+      <figure>
+        <svg id="top-view" viewBox="0 0 320 320" role="img" aria-label="Top-down view of the walkway"></svg>
+        <figcaption>From above. Drag the visitor along the walkway.</figcaption>
+      </figure>
+      <figure>
+        <svg id="side-view" viewBox="0 0 320 200" role="img" aria-label="Side view"></svg>
+        <figcaption>From the side, sensor on the left.</figcaption>
+      </figure>
+    </section>
+
+    <section class="controls">
+      <fieldset>
+        <legend>Visitor</legend>
+        <label class="field">
+          <span>Distance from the sensor</span>
+          <span class="pair">
+            <input id="distance" type="range" min="0" max="5" step="0.01">
+            <input id="distance-number" type="number" min="0" max="10" step="0.01" aria-label="Distance in metres">
+            <span class="unit">m</span>
+          </span>
+        </label>
+        <label class="check"><input id="nobody" type="checkbox"> Nobody there (sensor sends <code>none</code>)</label>
+        <label class="check"><input id="online" type="checkbox" checked> Sensor online (untick to watch the stale timeout)</label>
+        <label class="field">
+          <span>Sensor noise</span>
+          <span class="pair">
+            <input id="noise" type="range" min="0" max="0.2" step="0.01">
+            <output id="noise-value"></output>
+          </span>
+        </label>
+        <div class="actions">
+          <button id="walk" type="button">Walk up to the door</button>
+          <button id="reseed" type="button" class="quiet">New random seed</button>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Installation</legend>
+        <div id="params"></div>
+        <button id="defaults" type="button" class="quiet">Reset to defaults</button>
+      </fieldset>
+
+      <fieldset>
+        <legend>Device config</legend>
+        <p class="hint">Publish this, retained, to <code>halloween/eyes/config</code>. The device merges it over its
+          provisioned defaults.</p>
+        <pre id="config-json"></pre>
+        <button id="copy-json" type="button" class="quiet">Copy JSON</button>
+        <label class="field">
+          <span>Try a payload</span>
+          <textarea id="json-input" rows="4" spellcheck="false" placeholder='{"eyes_height_m": 2.1}'></textarea>
+        </label>
+        <button id="apply-json" type="button">Apply payload</button>
+        <p id="json-status" class="status" role="status"></p>
+      </fieldset>
+    </section>
+  </main>
+  <script type="module" src="main.js"></script>
+</body>
+</html>

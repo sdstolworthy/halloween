@@ -1,0 +1,13 @@
+[package]
+name = "eyes-web"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[lib]
+# cdylib is the browser .wasm; rlib lets host `cargo test` link the same code.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+eyes-core = { path = "../eyes-core" }
+eyes-render = { path = "../eyes-render" }

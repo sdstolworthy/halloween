@@ -70,6 +70,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "eyes-web"
+version = "0.1.0"
+dependencies = [
+ "eyes-core",
+ "eyes-render",
+]
+
+[[package]]
 name = "float-cmp"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
