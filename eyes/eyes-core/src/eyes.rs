@@ -310,7 +310,9 @@ impl<R: Rng> Eyes<R> {
         self.squint = approach(self.squint, squint_target(distance_m), SQUINT_TAU_S, dt_s);
         self.expire_evil(now_ms);
         let blink = self.blink_closure(now_ms);
-        let brow_target = if self.look == Look::Evil { 1.0 } else { 0.0 };
+        // Written as a conversion, not `if evil { 1.0 } else { 0.0 }`: LLVM turns that select into a
+        // two-entry float table, which the Xtensa backend (esp toolchain 1.95) fails to compile.
+        let brow_target = f32::from(u8::from(self.look == Look::Evil));
         self.brow = approach(self.brow, brow_target, BROW_TAU_S, dt_s);
 
         Pose {
