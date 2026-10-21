@@ -55,7 +55,8 @@ packages:
   porch_sensor: !include sensor.yaml
 
 # The eyes track the visitor from the ~10 Hz internal distance (after the "nobody" mapping and median), so
-# it goes out on its own topic as plain metres. The package stays MQTT-free for devices that include it.
+# it goes out on its own topic as plain metres, or `none` when the package reports nobody (no echo or
+# beyond Max range). The package stays MQTT-free for devices that include it.
 sensor:
   - id: !extend porch_distance_raw
     on_value:
@@ -64,6 +65,7 @@ sensor:
           then:
             - mqtt.publish:
                 topic: halloween/porch/distance
-                payload: !lambda 'return str_sprintf("%.2f", x);'
+                payload: !lambda |-
+                  return x >= ${porch_nobody_m}f ? std::string("none") : str_sprintf("%.2f", x);
                 qos: 0
                 retain: false
