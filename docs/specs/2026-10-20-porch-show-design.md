@@ -59,7 +59,7 @@ can later be merged into another device (shaker or eyes) with a one-line include
   - **Distance** (published) — derived from the raw sensor, sent on change > 5 cm or at least every 30 s, so the HA
     recorder isn't flooded.
 - **Visitor** binary sensor, built from ESPHome filters (no custom C++):
-  - on after distance < *Trigger distance* continuously for 300 ms;
+  - on after distance ≤ *Trigger distance* continuously for 300 ms;
   - off after distance > *Trigger distance* + 0.3 m (or no echo) continuously for 2 s.
 - Tuning entities (`entity_category: config`, restored across reboots):
   - **Trigger distance** — number, m, default 2.0, range 0.3–4.0.
