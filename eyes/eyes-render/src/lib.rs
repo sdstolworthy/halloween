@@ -124,8 +124,13 @@ impl Eye {
         let brow = unit(pose.brow);
         let closure = unit(pose.blink).max(squint).max(brow * EVIL_NARROWING);
         // Screen-left eye's nose side is +x, the other eye's is -x; the lid drops on the nose side.
-        let towards_nose = if index == 0 { 1.0 } else { -1.0 };
-        let tilt = towards_nose * squint * SQUINT_TILT_PX;
+        // +1 for the screen-left eye, -1 for the other, as arithmetic rather than a float select (see
+        // `Eyes::tick` for the Xtensa backend bug that avoids).
+        let towards_nose = 1.0 - 2.0 * index as f32;
+        // The squint's tilt lifts the outer corner, so it fades out as the blink closes: a shut lid is
+        // shut whatever the squint. Scaled by the blink alone, not the squint's own narrowing, so open
+        // squinting eyes keep their shape.
+        let tilt = towards_nose * squint * SQUINT_TILT_PX * (1.0 - unit(pose.blink));
         let brow_tilt = towards_nose * brow * EVIL_TILT_PX;
         // The lids follow the sclera's elliptical outline when open and converge on the meeting line as
         // they close; with `closure` 0 the visible region is exactly the ellipse.

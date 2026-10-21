@@ -367,3 +367,68 @@ fn evil_golden_frames() {
         .collect();
     assert!(mismatches.is_empty(), "golden mismatch: {mismatches:?}");
 }
+
+#[test]
+fn a_shut_lid_is_shut_whatever_the_squint_brow_look_or_gaze() {
+    for look in [Look::Normal, Look::Evil] {
+        for squint_step in 0..=8 {
+            for brow_step in 0..=4 {
+                for gaze in [Vec2::ZERO, Vec2::new(0.9, 0.3), Vec2::new(-0.9, -0.3)] {
+                    let pose = Pose {
+                        gaze: [gaze; 2],
+                        blink: 1.0,
+                        squint: squint_step as f32 * 0.05,
+                        brow: brow_step as f32 * 0.25,
+                        look,
+                        ..Pose::RESTING
+                    };
+                    assert_eq!(lit(&render(&pose)), 0, "{pose:?}");
+                }
+            }
+        }
+    }
+}
+
+/// Tracks a squinting visitor at the door, asks for `to` at `request_ms`, and returns the rendered switch
+/// frame (or `None` if the look never changed).
+fn switch_frame(to: Look, request_ms: u64, frame_ms: u64) -> Option<Framebuffer> {
+    use eyes_core::{Eyes, Reading, SplitMix64};
+    let mut eyes = Eyes::new(EyesConfig::DEFAULT, SplitMix64::new(3), 0);
+    if to == Look::Normal {
+        eyes.request_look(Look::Evil, 0);
+    }
+    let mut now_ms = 0;
+    let mut previous = Look::Normal;
+    while now_ms < request_ms + 2000 {
+        if now_ms % 100 < frame_ms {
+            eyes.observe(Reading::Distance(0.45), now_ms);
+        }
+        if (request_ms..request_ms + frame_ms).contains(&now_ms) {
+            eyes.request_look(to, now_ms);
+        }
+        let pose = eyes.tick(now_ms);
+        if now_ms > request_ms && pose.look == to && previous != to {
+            return Some(render(&pose));
+        }
+        previous = pose.look;
+        now_ms += frame_ms;
+    }
+    None
+}
+
+#[test]
+fn the_look_switch_frame_shows_nothing_even_for_a_squinting_visitor() {
+    // Requests at many moments relative to the eyes' own blinks, both ways, at 200 and 30 fps.
+    for to in [Look::Evil, Look::Normal] {
+        for frame_ms in [5, 33] {
+            for request_ms in (3000..6000).step_by(137) {
+                let frame = switch_frame(to, request_ms, frame_ms).expect("the look switched");
+                assert_eq!(
+                    lit(&frame),
+                    0,
+                    "to {to:?} at {request_ms} ms, {frame_ms} ms frames"
+                );
+            }
+        }
+    }
+}
