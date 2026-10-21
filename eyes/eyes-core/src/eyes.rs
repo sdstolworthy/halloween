@@ -29,6 +29,9 @@ const LINGER_MS: u64 = 1500;
 /// in-range readings, and only let go after "nobody" has been reported continuously for `LEAVE_MS`.
 /// Without it, alternating hits and misses flip the mode (and fire a startled blink) every 100 ms.
 const ENTER_READINGS: u32 = 2;
+/// Sightings further apart than this (2.5 sensor periods) aren't consecutive: the count starts again, so
+/// a lone reading after a silence can't complete a streak begun long before.
+const MAX_SIGHTING_GAP_MS: u64 = 250;
 const LEAVE_MS: u64 = 500;
 /// At most one startled blink per this long, however often the visitor comes and goes.
 const STARTLE_COOLDOWN_MS: u64 = 3000;
@@ -117,8 +120,9 @@ pub struct Eyes<R: Rng> {
     last_tick_ms: u64,
     presence: Presence,
     last_startle_ms: Option<u64>,
-    /// Last gaze targets aimed at a visitor in front of the panel; held while the face is behind it.
-    held_targets: [Vec2; 2],
+    /// Last gaze targets aimed at the current visitor while in front of the panel; held while their face
+    /// is behind it. Cleared when they leave, so the next visitor never inherits it.
+    held_targets: Option<[Vec2; 2]>,
     springs: [Spring; 2],
     wander_target: Vec2,
     next_wander_ms: u64,
@@ -138,7 +142,7 @@ impl<R: Rng> Eyes<R> {
             last_tick_ms: now_ms,
             presence: Presence::default(),
             last_startle_ms: None,
-            held_targets: [Vec2::ZERO; 2],
+            held_targets: None,
             springs: [Spring::default(); 2],
             wander_target: Vec2::ZERO,
             next_wander_ms: now_ms + LINGER_MS,
@@ -167,8 +171,15 @@ impl<R: Rng> Eyes<R> {
         let presence = &mut self.presence;
         match reading {
             Reading::Distance(metres) if metres < self.config.max_range_m => {
+                let continues = presence.last_seen.is_some_and(|(_, seen_ms)| {
+                    now_ms.saturating_sub(seen_ms) <= MAX_SIGHTING_GAP_MS
+                });
+                presence.streak = if continues {
+                    presence.streak.saturating_add(1)
+                } else {
+                    1
+                };
                 presence.last_seen = Some((metres, now_ms));
-                presence.streak = presence.streak.saturating_add(1);
                 presence.absent_since_ms = None;
             }
             _ => {
@@ -200,11 +211,16 @@ impl<R: Rng> Eyes<R> {
         let dt_s = ((now_ms - self.last_tick_ms) as f32 / 1000.0).min(MAX_DT_S);
         self.last_tick_ms = now_ms;
 
-        let distance_m = self.visitor_distance(now_ms);
-        self.update_mode(distance_m.is_some(), now_ms);
+        // A visitor the eyes have nothing sensible to aim at (behind the panel, never seen in front of
+        // it) counts as nobody.
+        let tracked = self
+            .visitor_distance(now_ms)
+            .and_then(|distance_m| Some((distance_m, self.tracking_targets(distance_m)?)));
+        self.update_mode(tracked.is_some(), now_ms);
+        let distance_m = tracked.map(|(distance_m, _)| distance_m);
 
-        let (targets, omega) = match distance_m {
-            Some(distance_m) => (self.tracking_targets(distance_m), TRACK_OMEGA),
+        let (targets, omega) = match tracked {
+            Some((_, targets)) => (targets, TRACK_OMEGA),
             None => ([self.wander(now_ms); 2], IDLE_OMEGA),
         };
         for (spring, target) in self.springs.iter_mut().zip(targets) {
@@ -246,6 +262,7 @@ impl<R: Rng> Eyes<R> {
                 }
             }
             (Mode::Tracking, Mode::Idle) => {
+                self.held_targets = None;
                 self.wander_target = (self.springs[0].position + self.springs[1].position) * 0.5;
                 self.next_wander_ms = now_ms + LINGER_MS;
             }
@@ -256,12 +273,12 @@ impl<R: Rng> Eyes<R> {
 
     /// Where each eye should look at a visitor `distance_m` away. A face behind the panel's plane can't be
     /// looked at (the angles swing past 90 degrees and the eyes would cross), so the last sensible targets
-    /// are held instead.
-    fn tracking_targets(&mut self, distance_m: f32) -> [Vec2; 2] {
+    /// are held instead, or `None` if there are none yet.
+    fn tracking_targets(&mut self, distance_m: f32) -> Option<[Vec2; 2]> {
         let angles = gaze_angles(&self.config, distance_m);
         if !angles.iter().any(GazeAngles::is_behind) {
             let max_gaze_deg = self.config.max_gaze_deg;
-            self.held_targets = angles.map(|angles| gaze_point(angles, max_gaze_deg));
+            self.held_targets = Some(angles.map(|angles| gaze_point(angles, max_gaze_deg)));
         }
         self.held_targets
     }
@@ -529,15 +546,56 @@ mod tests {
     }
 
     #[test]
-    fn a_face_behind_the_panel_holds_the_last_gaze() {
-        // Panel 2 m down the walkway facing the approaching visitor; once they pass it, their face is
-        // behind the panel's plane.
+    fn a_lone_reading_after_going_idle_on_silence_does_not_track() {
+        let mut eyes = eyes();
+        run(&mut eyes, Some(Reading::Distance(2.0)), 0, 1000);
+        eyes.tick(4000);
+        let went_idle = eyes.mode() == Mode::Idle;
+        eyes.observe(Reading::Distance(3.0), 4100);
+        eyes.tick(4100);
+        assert!(went_idle && eyes.mode() == Mode::Idle);
+    }
+
+    #[test]
+    fn readings_spread_further_apart_than_the_gap_are_not_consecutive() {
+        let mut eyes = eyes();
+        eyes.observe(Reading::Distance(2.0), 1000);
+        eyes.observe(Reading::Distance(2.0), 1000 + MAX_SIGHTING_GAP_MS + 1);
+        eyes.tick(1000 + MAX_SIGHTING_GAP_MS + 1);
+        assert_eq!(eyes.mode(), Mode::Idle);
+    }
+
+    /// Panel 2 m down the walkway facing the approaching visitor; a visitor nearer the door than that has
+    /// their face behind the panel's plane.
+    fn panel_down_the_walkway() -> Eyes<SplitMix64> {
         let config = EyesConfig {
             eyes_offset_x_m: 0.5,
             eyes_offset_y_m: 2.0,
             ..EyesConfig::DEFAULT
         };
-        let mut eyes = Eyes::new(config, SplitMix64::new(1), 0);
+        Eyes::new(config, SplitMix64::new(1), 0)
+    }
+
+    #[test]
+    fn a_face_behind_the_panel_with_nothing_held_stays_idle() {
+        let mut eyes = panel_down_the_walkway();
+        run(&mut eyes, Some(Reading::Distance(1.0)), 0, 2000);
+        assert_eq!(eyes.mode(), Mode::Idle);
+    }
+
+    #[test]
+    fn the_next_visitor_does_not_inherit_a_held_gaze() {
+        let mut eyes = panel_down_the_walkway();
+        run(&mut eyes, Some(Reading::Distance(3.0)), 0, 2000);
+        eyes.observe(Reading::Nobody, 2000);
+        run(&mut eyes, None, 2000, 5000);
+        run(&mut eyes, Some(Reading::Distance(1.0)), 5000, 7000);
+        assert_eq!(eyes.mode(), Mode::Idle);
+    }
+
+    #[test]
+    fn a_face_behind_the_panel_holds_the_last_gaze() {
+        let mut eyes = panel_down_the_walkway();
         let in_front = run(&mut eyes, Some(Reading::Distance(3.0)), 0, 2000);
         let held = run(&mut eyes, Some(Reading::Distance(1.0)), 2000, 4000);
         let before = in_front.last().unwrap().gaze;
