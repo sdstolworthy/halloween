@@ -252,7 +252,7 @@ fn connect_mqtt(
                 ..
             } => match lock(&mailbox).deliver(topic, data) {
                 Delivery::DroppedOldest => warn!("render loop behind; dropped the oldest distance"),
-                Delivery::Queued | Delivery::ReplacedConfig | Delivery::Ignored => {}
+                Delivery::Queued | Delivery::ReplacedUnread | Delivery::Ignored => {}
             },
             EventPayload::Received { .. } => {
                 warn!("ignoring an MQTT message larger than {MQTT_BUFFER_BYTES} B")
@@ -268,6 +268,7 @@ fn announce(client: &mut EspMqttClient<'static>) {
     let results = [
         client.subscribe(topics::DISTANCE, QoS::AtMostOnce),
         client.subscribe(topics::CONFIG, QoS::AtLeastOnce),
+        client.subscribe(topics::MODE, QoS::AtLeastOnce),
         client.publish(topics::STATUS, QoS::AtLeastOnce, true, topics::ONLINE),
     ];
     for result in results {

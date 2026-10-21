@@ -198,6 +198,7 @@ fn out_of_range_pose_values_render_without_panicking() {
         blink: -2.0,
         squint: f32::NAN,
         dilation: 9.0,
+        ..Pose::RESTING
     };
     assert!(lit(&render(&wild)) > 0);
 }
@@ -244,6 +245,7 @@ fn golden_frames() {
         blink: 0.0,
         squint,
         dilation,
+        ..Pose::RESTING
     };
     let cases = [
         ("resting", Pose::RESTING, 0x1958_2E79),

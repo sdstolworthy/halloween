@@ -17,7 +17,7 @@ pub mod rng;
 pub mod topics;
 
 pub use config::{ConfigError, EyesConfig, Param};
-pub use eyes::{Eyes, Mode, Pose};
+pub use eyes::{Eyes, LookRequest, Mode, Pose};
 pub use geometry::{GazeAngles, Vec2, Vec3};
-pub use payload::{parse_distance, PayloadError, Reading};
+pub use payload::{parse_distance, parse_look, Look, PayloadError, Reading};
 pub use rng::{Rng, SplitMix64};

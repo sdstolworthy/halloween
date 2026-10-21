@@ -4,6 +4,8 @@
 pub const DISTANCE: &str = "halloween/porch/distance";
 /// Retained JSON object of config keys, merged over the provisioned defaults.
 pub const CONFIG: &str = "halloween/eyes/config";
+/// Retained `evil` or `normal`, set by the house's scare automation.
+pub const MODE: &str = "halloween/eyes/mode";
 /// Retained availability: [`ONLINE`] on connect, [`OFFLINE`] via the last will.
 pub const STATUS: &str = "halloween/eyes/status";
 
@@ -14,12 +16,14 @@ pub const OFFLINE: &[u8] = b"offline";
 pub enum Topic {
     Distance,
     Config,
+    Mode,
 }
 
 pub fn route(topic: &str) -> Option<Topic> {
     match topic {
         DISTANCE => Some(Topic::Distance),
         CONFIG => Some(Topic::Config),
+        MODE => Some(Topic::Mode),
         _ => None,
     }
 }
@@ -33,6 +37,7 @@ mod tests {
         let cases = [
             (DISTANCE, Some(Topic::Distance)),
             (CONFIG, Some(Topic::Config)),
+            (MODE, Some(Topic::Mode)),
             (STATUS, None),
             ("halloween/porch/distance/extra", None),
             ("", None),

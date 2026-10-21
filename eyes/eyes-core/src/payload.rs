@@ -13,9 +13,18 @@ pub enum Reading {
     Nobody,
 }
 
+/// Which palette and brow the eyes wear: everyday, or the house's scare mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Look {
+    #[default]
+    Normal,
+    Evil,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PayloadError {
     NotUtf8,
+    UnknownLook,
     NotANumber,
     NotFinite,
     Negative,
@@ -25,6 +34,7 @@ impl fmt::Display for PayloadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::NotUtf8 => "payload is not UTF-8",
+            Self::UnknownLook => "mode must be `evil` or `normal`",
             Self::NotANumber => "payload is neither a number of metres nor `none`",
             Self::NotFinite => "distance is not finite",
             Self::Negative => "distance is negative",
@@ -49,9 +59,41 @@ pub fn parse_distance(payload: &[u8]) -> Result<Reading, PayloadError> {
     }
 }
 
+/// The mode topic's payload: `evil` or `normal`, ignoring case and surrounding whitespace.
+pub fn parse_look(payload: &[u8]) -> Result<Look, PayloadError> {
+    let text = core::str::from_utf8(payload)
+        .map_err(|_| PayloadError::NotUtf8)?
+        .trim();
+    if text.eq_ignore_ascii_case("evil") {
+        Ok(Look::Evil)
+    } else if text.eq_ignore_ascii_case("normal") {
+        Ok(Look::Normal)
+    } else {
+        Err(PayloadError::UnknownLook)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_mode_payloads() {
+        let cases: [(&[u8], Result<Look, PayloadError>); 9] = [
+            (b"evil", Ok(Look::Evil)),
+            (b"EVIL", Ok(Look::Evil)),
+            (b" Evil\n", Ok(Look::Evil)),
+            (b"normal", Ok(Look::Normal)),
+            (b"Normal ", Ok(Look::Normal)),
+            (b"", Err(PayloadError::UnknownLook)),
+            (b"scary", Err(PayloadError::UnknownLook)),
+            (b"evil!", Err(PayloadError::UnknownLook)),
+            (&[0xff], Err(PayloadError::NotUtf8)),
+        ];
+        for (payload, want) in cases {
+            assert_eq!(parse_look(payload), want, "{payload:?}");
+        }
+    }
 
     #[test]
     fn parses_payloads() {

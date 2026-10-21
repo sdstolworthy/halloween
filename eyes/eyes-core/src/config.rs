@@ -33,6 +33,9 @@ pub struct EyesConfig {
     pub max_range_m: f32,
     /// With no reading for this long the eyes go idle, so a dead sensor or broker never freezes them.
     pub stale_timeout_s: f32,
+    /// Evil mode reverts to normal by itself after this long without a `normal`, so a lost message or a
+    /// crashed automation can't leave the porch scary all night.
+    pub max_evil_s: f32,
     /// Panel brightness, 1..=255. Kept low by default: a 128x64 panel at full white draws several amps.
     pub brightness: u8,
 }
@@ -49,6 +52,7 @@ impl EyesConfig {
         max_gaze_deg: 55.0,
         max_range_m: SENSOR_MAX_RANGE_M,
         stale_timeout_s: 2.0,
+        max_evil_s: 300.0,
         brightness: 64,
     };
 
@@ -69,6 +73,7 @@ impl EyesConfig {
             Param::MaxGaze => self.max_gaze_deg,
             Param::MaxRange => self.max_range_m,
             Param::StaleTimeout => self.stale_timeout_s,
+            Param::MaxEvil => self.max_evil_s,
             Param::Brightness => f32::from(self.brightness),
         }
     }
@@ -91,6 +96,7 @@ impl EyesConfig {
             Param::MaxGaze => self.max_gaze_deg = value,
             Param::MaxRange => self.max_range_m = value,
             Param::StaleTimeout => self.stale_timeout_s = value,
+            Param::MaxEvil => self.max_evil_s = value,
             Param::Brightness => self.brightness = value as u8,
         }
         Ok(self)
@@ -132,6 +138,7 @@ pub enum Param {
     MaxGaze,
     MaxRange,
     StaleTimeout,
+    MaxEvil,
     Brightness,
 }
 
@@ -156,7 +163,7 @@ const fn spec(key: &'static str, min: f32, max: f32, step: f32) -> ParamSpec {
 }
 
 impl Param {
-    pub const ALL: [Param; 11] = [
+    pub const ALL: [Param; 12] = [
         Param::EyesOffsetX,
         Param::EyesOffsetY,
         Param::EyesHeight,
@@ -167,6 +174,7 @@ impl Param {
         Param::MaxGaze,
         Param::MaxRange,
         Param::StaleTimeout,
+        Param::MaxEvil,
         Param::Brightness,
     ];
 
@@ -184,6 +192,7 @@ impl Param {
             // for a visitor.
             Param::MaxRange => spec("max_range_m", 0.5, SENSOR_MAX_RANGE_M, 0.05),
             Param::StaleTimeout => spec("stale_timeout_s", 0.2, 60.0, 0.1),
+            Param::MaxEvil => spec("max_evil_s", 10.0, 3600.0, 10.0),
             Param::Brightness => ParamSpec {
                 integer: true,
                 ..spec("brightness", 1.0, 255.0, 1.0)
@@ -262,6 +271,8 @@ mod tests {
             (Param::EyesHeight, -0.1, false),
             (Param::PanelYaw, -180.0, true),
             (Param::MaxGaze, 9.0, false),
+            (Param::MaxEvil, 9.0, false),
+            (Param::MaxEvil, 3600.0, true),
             (Param::MaxRange, 4.5, true),
             (Param::MaxRange, 4.51, false),
             (Param::FaceHeight, f32::NAN, false),

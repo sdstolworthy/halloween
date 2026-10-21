@@ -1,5 +1,5 @@
 use eyes_core::topics::{self, Topic};
-use eyes_core::{parse_distance, Eyes, EyesConfig, Mode, Rng};
+use eyes_core::{parse_distance, parse_look, Eyes, EyesConfig, Look, LookRequest, Mode, Rng};
 use log::{info, warn};
 
 use crate::{Clock, Inbox, Matrix, Message};
@@ -43,6 +43,10 @@ impl<M: Matrix, C: Clock, I: Inbox, R: Rng> App<M, C, I, R> {
         self.eyes.mode()
     }
 
+    pub fn requested_look(&self) -> Look {
+        self.eyes.requested_look()
+    }
+
     pub fn frame(&mut self) {
         let now_ms = self.clock.uptime_ms();
         for _ in 0..MAX_MESSAGES_PER_FRAME {
@@ -51,7 +55,14 @@ impl<M: Matrix, C: Clock, I: Inbox, R: Rng> App<M, C, I, R> {
             };
             self.handle(&message, now_ms);
         }
+        let requested = self.eyes.requested_look();
         let pose = self.eyes.tick(now_ms);
+        if requested == Look::Evil && self.eyes.requested_look() == Look::Normal {
+            info!(
+                "mode: evil timed out after {} s without a normal; switching back",
+                self.eyes.config().max_evil_s
+            );
+        }
         if eyes_render::draw(&pose, &mut self.matrix).is_err() {
             warn!("drawing the eyes failed");
         }
@@ -70,6 +81,19 @@ impl<M: Matrix, C: Clock, I: Inbox, R: Rng> App<M, C, I, R> {
                 ),
             },
             Some(Topic::Config) => self.apply_config(&message.payload),
+            Some(Topic::Mode) => match parse_look(&message.payload) {
+                Ok(look) => match self.eyes.request_look(look, now_ms) {
+                    LookRequest::Switching => info!("mode: switching to {look:?} at the next blink"),
+                    LookRequest::Unchanged => {}
+                    LookRequest::IgnoredAfterTimeout => warn!(
+                        "mode: ignoring evil, which timed out after max_evil_s; publish normal to re-arm"
+                    ),
+                },
+                Err(error) => warn!(
+                    "mode: ignoring {:?}: {error}",
+                    printable(&message.payload)
+                ),
+            },
             None => {}
         }
     }
@@ -171,6 +195,27 @@ mod tests {
         rig.inbox.push(topics::CONFIG, b"{not json");
         rig.frame_at(100);
         assert_eq!(rig.matrix.flushes(), 1);
+    }
+
+    #[test]
+    fn mode_messages_request_a_look() {
+        let cases: [(&[u8], Look); 4] = [
+            (b"evil", Look::Evil),
+            (b" EVIL ", Look::Evil),
+            (b"normal", Look::Normal),
+            (b"spooky", Look::Normal),
+        ];
+        for (payload, want) in cases {
+            let mut rig = rig();
+            rig.inbox.push(topics::MODE, payload);
+            rig.frame_at(100);
+            assert_eq!(
+                rig.app.requested_look(),
+                want,
+                "{:?}",
+                core::str::from_utf8(payload)
+            );
+        }
     }
 
     #[test]

@@ -7,7 +7,7 @@ use crate::blink::{Blink, BlinkKind};
 use crate::config::EyesConfig;
 use crate::geometry::{gaze_angles, gaze_point, gaze_shift_deg, GazeAngles, Vec2};
 use crate::motion::{approach, Spring};
-use crate::payload::Reading;
+use crate::payload::{Look, Reading};
 use crate::rng::Rng;
 
 /// Spring speed while tracking: ~90% of a step in 0.28 s. Fast enough to feel attentive, slow enough to
@@ -72,6 +72,13 @@ const SQUINT_FULL_M: f32 = 0.4;
 const SQUINT_MAX: f32 = 0.4;
 const SQUINT_TAU_S: f32 = 0.3;
 
+/// A change of look happens only while the lids are fully shut, so the palette never pops in view. A blink
+/// carrying a switch stays shut at least this long, so a 30 fps frame always lands inside it.
+const SWITCH_HOLD_MS: u64 = 50;
+/// The evil brow grows in from the moment of the switch: about half formed as the lid finishes reopening
+/// (~120 ms) and complete within ~0.6 s, so the scowl forms as the eye opens instead of snapping in.
+const BROW_TAU_S: f32 = 0.2;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Idle,
@@ -89,6 +96,10 @@ pub struct Pose {
     pub squint: f32,
     /// Pupil size, 0 = pinpoint, 1 = fully dilated.
     pub dilation: f32,
+    /// The palette to draw.
+    pub look: Look,
+    /// How far the evil brow (slanted, narrowed lids) has formed, 0..1.
+    pub brow: f32,
 }
 
 impl Pose {
@@ -97,7 +108,20 @@ impl Pose {
         blink: 0.0,
         squint: 0.0,
         dilation: IDLE_DILATION,
+        look: Look::Normal,
+        brow: 0.0,
     };
+}
+
+/// What [`Eyes::request_look`] did with a request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LookRequest {
+    /// The eyes will switch at the next shut lid.
+    Switching,
+    /// Already wearing (or heading for) that look; for `evil`, the safety timer is not extended.
+    Unchanged,
+    /// `evil` after the safety net reverted it; ignored until a `normal` arrives.
+    IgnoredAfterTimeout,
 }
 
 /// What the sensor has said recently, debounced into "is someone there".
@@ -128,6 +152,13 @@ pub struct Eyes<R: Rng> {
     last_blink_ms: u64,
     next_routine_blink_ms: u64,
     moving: bool,
+    look: Look,
+    requested_look: Look,
+    evil_since_ms: Option<u64>,
+    evil_timed_out: bool,
+    /// The start of the blink chosen to hide a pending look switch.
+    switch_carrier_ms: Option<u64>,
+    brow: f32,
     dilation: f32,
     squint: f32,
 }
@@ -149,6 +180,12 @@ impl<R: Rng> Eyes<R> {
             last_blink_ms: now_ms,
             next_routine_blink_ms: now_ms,
             moving: false,
+            look: Look::Normal,
+            requested_look: Look::Normal,
+            evil_since_ms: None,
+            evil_timed_out: false,
+            switch_carrier_ms: None,
+            brow: 0.0,
             dilation: IDLE_DILATION,
             squint: 0.0,
         }
@@ -163,6 +200,36 @@ impl<R: Rng> Eyes<R> {
 
     pub fn mode(&self) -> Mode {
         self.mode
+    }
+
+    /// The look being drawn.
+    pub fn look(&self) -> Look {
+        self.look
+    }
+
+    /// The look the eyes are switching to (equal to [`Eyes::look`] when no switch is pending).
+    pub fn requested_look(&self) -> Look {
+        self.requested_look
+    }
+
+    /// Ask for a look; it is applied at the next fully shut lid. The safety timer for `evil` runs from
+    /// when it was first requested: a re-delivered `evil` (a retained message after a reconnect) doesn't
+    /// extend it, and after the timer reverts to normal, `evil` is ignored until a `normal` arrives.
+    pub fn request_look(&mut self, look: Look, now_ms: u64) -> LookRequest {
+        match look {
+            Look::Normal => {
+                self.evil_since_ms = None;
+                self.evil_timed_out = false;
+            }
+            Look::Evil if self.evil_timed_out => return LookRequest::IgnoredAfterTimeout,
+            Look::Evil if self.requested_look != Look::Evil => self.evil_since_ms = Some(now_ms),
+            Look::Evil => {}
+        }
+        if self.requested_look == look {
+            return LookRequest::Unchanged;
+        }
+        self.requested_look = look;
+        LookRequest::Switching
     }
 
     /// Whether the gaze was still travelling at the last tick.
@@ -241,14 +308,20 @@ impl<R: Rng> Eyes<R> {
             dt_s,
         );
         self.squint = approach(self.squint, squint_target(distance_m), SQUINT_TAU_S, dt_s);
+        self.expire_evil(now_ms);
+        let blink = self.blink_closure(now_ms);
+        let brow_target = if self.look == Look::Evil { 1.0 } else { 0.0 };
+        self.brow = approach(self.brow, brow_target, BROW_TAU_S, dt_s);
 
         Pose {
             gaze: self
                 .springs
                 .map(|spring| spring.position.clamped_to_unit_disc()),
-            blink: self.blink_closure(now_ms),
+            blink,
             squint: self.squint,
             dilation: self.dilation,
+            look: self.look,
+            brow: self.brow,
         }
     }
 
@@ -402,7 +475,60 @@ impl<R: Rng> Eyes<R> {
         if routine_due {
             self.start_blink(Blink::routine(now_ms));
         }
-        self.blink.map_or(0.0, |blink| blink.closure(now_ms))
+        if self.look != self.requested_look {
+            self.choose_switch_carrier(now_ms);
+        }
+        let closure = self.blink.map_or(0.0, |blink| blink.closure(now_ms));
+        match self.blink {
+            Some(blink)
+                if self.switch_carrier_ms == Some(blink.start_ms) && now_ms >= blink.closed_ms =>
+            {
+                self.look = self.requested_look;
+                self.switch_carrier_ms = None;
+                // Normally inside the carrier's shut hold anyway; at a very low frame rate this frame is
+                // drawn shut rather than ever showing the new palette with the lid open.
+                1.0
+            }
+            _ => closure,
+        }
+    }
+
+    /// Pick the blink that will hide a pending look switch: one that hasn't shut yet (held shut long
+    /// enough for a frame to land on it), or a fresh routine blink. A blink already reopening is left to
+    /// finish first. This blinks even while a tracking gaze is moving: a change of look is a deliberate
+    /// event, unlike the routine blinks that wait for the gaze to settle.
+    fn choose_switch_carrier(&mut self, now_ms: u64) {
+        match self.blink {
+            Some(blink) if self.switch_carrier_ms == Some(blink.start_ms) => {}
+            Some(blink) if now_ms < blink.closed_ms => {
+                let hold_until = blink.reopen_ms.max(blink.closed_ms + SWITCH_HOLD_MS);
+                let delay = hold_until - blink.reopen_ms;
+                self.blink = Some(Blink {
+                    reopen_ms: hold_until,
+                    end_ms: blink.end_ms + delay,
+                    ..blink
+                });
+                self.switch_carrier_ms = Some(blink.start_ms);
+            }
+            Some(_) => {}
+            None => {
+                let blink = Blink::routine(now_ms);
+                self.start_blink(blink);
+                self.switch_carrier_ms = Some(blink.start_ms);
+            }
+        }
+    }
+
+    /// The safety net: evil reverts to normal by itself after `max_evil_s`.
+    fn expire_evil(&mut self, now_ms: u64) {
+        let expired = self.evil_since_ms.is_some_and(|since_ms| {
+            now_ms.saturating_sub(since_ms) as f32 / 1000.0 >= self.config.max_evil_s
+        });
+        if expired {
+            self.requested_look = Look::Normal;
+            self.evil_since_ms = None;
+            self.evil_timed_out = true;
+        }
     }
 
     fn dilation_target(&self, distance_m: Option<f32>) -> f32 {
@@ -958,6 +1084,176 @@ mod tests {
         assert!(
             in_time && !was_moving,
             "forced at {at_ms} ms, moving {was_moving}"
+        );
+    }
+
+    /// Idle eyes (wandering off), optionally with a large glance's coupled blink started at t = 1000;
+    /// `evil` is requested at `request_ms`, then frames are sampled every `frame_ms` for 1.5 s. Returns
+    /// (look, lid closure as drawn) per frame.
+    fn request_evil(with_idle_blink: bool, request_ms: u64, frame_ms: u64) -> Vec<(Look, f32)> {
+        let mut eyes = eyes();
+        eyes.next_wander_ms = u64::MAX;
+        eyes.tick(1000);
+        if with_idle_blink {
+            eyes.shift_gaze(Vec2::new(-0.7, 0.0), 1000);
+        }
+        let mut now_ms = 1000;
+        while now_ms + frame_ms <= request_ms {
+            now_ms += frame_ms;
+            eyes.tick(now_ms);
+        }
+        eyes.request_look(Look::Evil, request_ms);
+        (request_ms..request_ms + 1500)
+            .step_by(frame_ms as usize)
+            .map(|now_ms| {
+                let pose = eyes.tick(now_ms);
+                (pose.look, pose.blink)
+            })
+            .collect()
+    }
+
+    /// Requests with no blink in progress, and during an idle blink's closing ramp, its shut instant and
+    /// its reopening, at 200 and 30 frames per second.
+    const SWITCH_CASES: [(&str, bool, u64); 4] = [
+        ("no blink", false, 1500),
+        ("closing", true, 1180),
+        ("shut", true, 1269),
+        ("reopening", true, 1400),
+    ];
+
+    #[test]
+    fn the_look_switches_once_and_only_with_the_lid_shut() {
+        for (phase, with_idle_blink, request_ms) in SWITCH_CASES {
+            for frame_ms in [5, 33] {
+                let frames = request_evil(with_idle_blink, request_ms, frame_ms);
+                let switches: Vec<usize> = frames
+                    .windows(2)
+                    .enumerate()
+                    .filter(|(_, pair)| pair[0].0 != pair[1].0)
+                    .map(|(index, _)| index + 1)
+                    .collect();
+                let hidden = switches.iter().all(|&index| frames[index].1 == 1.0);
+                assert!(
+                    switches.len() == 1 && hidden && frames[0].0 == Look::Normal,
+                    "{phase} at {frame_ms} ms frames: switches at {switches:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_switch_frame_is_shut_on_the_blink_timeline_at_30_fps() {
+        // At the device's frame rate the carrier's shut hold always catches a frame, so the forced-shut
+        // fallback for very slow frame rates is never needed.
+        for (phase, with_idle_blink, request_ms) in SWITCH_CASES {
+            let mut eyes = eyes();
+            eyes.next_wander_ms = u64::MAX;
+            eyes.tick(1000);
+            if with_idle_blink {
+                eyes.shift_gaze(Vec2::new(-0.7, 0.0), 1000);
+            }
+            eyes.request_look(Look::Evil, request_ms);
+            let switch_ms = (request_ms..request_ms + 1500)
+                .step_by(33)
+                .find(|&now_ms| eyes.tick(now_ms).look == Look::Evil)
+                .unwrap();
+            let on_timeline = eyes.blink.unwrap().closure(switch_ms);
+            assert_eq!(on_timeline, 1.0, "{phase}: switched at {switch_ms}");
+        }
+    }
+
+    #[test]
+    fn the_look_switches_while_the_tracking_gaze_is_moving() {
+        let mut eyes = eyes();
+        run(&mut eyes, Some(Reading::Distance(3.0)), 0, 3000);
+        eyes.request_look(Look::Evil, 3000);
+        let poses = run(&mut eyes, Some(Reading::Distance(0.4)), 3000, 3300);
+        assert_eq!(poses.last().unwrap().look, Look::Evil);
+    }
+
+    #[test]
+    fn the_evil_brow_grows_in_smoothly_after_the_switch() {
+        let mut eyes = eyes();
+        eyes.request_look(Look::Evil, 0);
+        let poses: Vec<Pose> = (0..2000)
+            .step_by(33)
+            .map(|now_ms| eyes.tick(now_ms))
+            .collect();
+        let steepest = poses
+            .windows(2)
+            .map(|pair| (pair[1].brow - pair[0].brow).abs())
+            .fold(0.0, f32::max);
+        let before_switch = poses
+            .iter()
+            .take_while(|pose| pose.look == Look::Normal)
+            .all(|pose| pose.brow == 0.0);
+        let formed = poses.last().unwrap().brow;
+        assert!(
+            steepest <= 0.16 && before_switch && formed > 0.95,
+            "steepest {steepest}, formed {formed}"
+        );
+    }
+
+    /// Evil requested at t = 0 with a 10 s safety net, re-delivered (as a retained message would be) at
+    /// t = 5 s; returns when the eyes asked to go back to normal by themselves.
+    fn evil_reverts_at_ms() -> u64 {
+        let mut eyes = Eyes::new(
+            EyesConfig {
+                max_evil_s: 10.0,
+                ..EyesConfig::DEFAULT
+            },
+            SplitMix64::new(1),
+            0,
+        );
+        eyes.request_look(Look::Evil, 0);
+        (0..20_000)
+            .step_by(33)
+            .find(|&now_ms| {
+                if now_ms == 4983 {
+                    assert_eq!(
+                        eyes.request_look(Look::Evil, now_ms),
+                        LookRequest::Unchanged
+                    );
+                }
+                eyes.tick(now_ms);
+                eyes.requested_look() == Look::Normal
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn evil_times_out_from_when_it_was_first_requested() {
+        let reverted_ms = evil_reverts_at_ms();
+        assert!(
+            (10_000..10_033).contains(&reverted_ms),
+            "reverted at {reverted_ms}"
+        );
+    }
+
+    #[test]
+    fn after_a_timeout_evil_is_ignored_until_normal_arrives() {
+        let mut eyes = Eyes::new(
+            EyesConfig {
+                max_evil_s: 10.0,
+                ..EyesConfig::DEFAULT
+            },
+            SplitMix64::new(1),
+            0,
+        );
+        eyes.request_look(Look::Evil, 0);
+        eyes.tick(10_000);
+        let responses = [
+            eyes.request_look(Look::Evil, 11_000),
+            eyes.request_look(Look::Normal, 12_000),
+            eyes.request_look(Look::Evil, 13_000),
+        ];
+        assert_eq!(
+            responses,
+            [
+                LookRequest::IgnoredAfterTimeout,
+                LookRequest::Unchanged,
+                LookRequest::Switching
+            ]
         );
     }
 
