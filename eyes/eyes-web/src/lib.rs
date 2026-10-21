@@ -8,10 +8,17 @@
 //! - Text crosses the boundary through two fixed buffers: JS writes UTF-8 into `input_ptr()` and calls
 //!   `apply_config_json(len)`; the last rejection reason is readable at `message_ptr()`/`message_len()`.
 //! - Times are milliseconds from `requestAnimationFrame`, monotonic within a page load.
+//! - Distances go in the way the device receives them: [`porch_sensor_payload`] formats them exactly as
+//!   porch-sensor publishes, and the text goes through the device's own `parse_distance`.
+//!
+//! The panel's display stage (gamma) is a separate, optional step on the RGBA copy; see [`panel`].
+
+pub mod panel;
 
 use eyes_core::geometry::{PanelFrame, Vec3};
 use eyes_core::layout::{PANEL_HEIGHT, PANEL_WIDTH};
-use eyes_core::{Eyes, EyesConfig, Mode, Param, Pose, Reading, SplitMix64};
+use eyes_core::payload::SENSOR_MAX_RANGE_M;
+use eyes_core::{parse_distance, Eyes, EyesConfig, Mode, Param, Pose, SplitMix64};
 use eyes_render::Framebuffer;
 
 const FRAMEBUFFER_LEN: usize = (PANEL_WIDTH * PANEL_HEIGHT * 4) as usize;
@@ -25,6 +32,7 @@ pub struct Emulator {
     input: [u8; INPUT_CAPACITY],
     message: [u8; MESSAGE_CAPACITY],
     message_len: usize,
+    sensor_payload: String,
 }
 
 impl Emulator {
@@ -40,6 +48,7 @@ impl Emulator {
             input: [0; INPUT_CAPACITY],
             message: [0; MESSAGE_CAPACITY],
             message_len: 0,
+            sensor_payload: String::new(),
         }
     }
 
@@ -100,8 +109,31 @@ impl Emulator {
         core::str::from_utf8(&self.message[..self.message_len]).unwrap_or_default()
     }
 
-    pub fn observe(&mut self, reading: Reading, now_ms: u64) {
-        self.eyes.observe(reading, now_ms);
+    /// Handle a distance-topic payload exactly as the device does. Returns false (with the reason in
+    /// [`Emulator::message`]) for a payload the device would ignore.
+    pub fn receive_distance(&mut self, payload: &[u8], now_ms: u64) -> bool {
+        match parse_distance(payload) {
+            Ok(reading) => {
+                self.eyes.observe(reading, now_ms);
+                true
+            }
+            Err(error) => {
+                self.set_message(&error.to_string());
+                false
+            }
+        }
+    }
+
+    /// Play porch-sensor seeing something `distance_m` away (`None` = no echo).
+    pub fn sensor_reading(&mut self, distance_m: Option<f32>, now_ms: u64) {
+        let payload = porch_sensor_payload(distance_m);
+        self.receive_distance(payload.as_bytes(), now_ms);
+        self.sensor_payload = payload;
+    }
+
+    /// The last payload [`Emulator::sensor_reading`] sent.
+    pub fn sensor_payload(&self) -> &str {
+        &self.sensor_payload
     }
 
     /// Advance to `now_ms` and render the resulting pose into the RGBA framebuffer.
@@ -118,6 +150,17 @@ impl Emulator {
 
     pub fn rgba(&self) -> &[u8; FRAMEBUFFER_LEN] {
         &self.rgba
+    }
+}
+
+/// What porch-sensor publishes on the distance topic: metres to two decimals, or `none` for no echo and
+/// anything at or beyond its range (mirrors the `mqtt.publish` lambda in porch-sensor.yaml).
+pub fn porch_sensor_payload(distance_m: Option<f32>) -> String {
+    match distance_m {
+        Some(metres) if metres.is_finite() && metres < SENSOR_MAX_RANGE_M => {
+            format!("{:.2}", metres.max(0.0))
+        }
+        _ => "none".into(),
     }
 }
 
@@ -260,14 +303,34 @@ mod abi {
         emulator().message().len()
     }
 
+    /// porch-sensor sees something `metres` away; NaN means no echo.
     #[no_mangle]
-    pub extern "C" fn observe_distance(metres: f32, now_ms: f64) {
-        emulator().observe(Reading::Distance(metres), millis(now_ms));
+    pub extern "C" fn sensor_reading(metres: f32, now_ms: f64) {
+        let distance = (!metres.is_nan()).then_some(metres);
+        emulator().sensor_reading(distance, millis(now_ms));
     }
 
     #[no_mangle]
-    pub extern "C" fn observe_nobody(now_ms: f64) {
-        emulator().observe(Reading::Nobody, millis(now_ms));
+    pub extern "C" fn sensor_payload_ptr() -> *const u8 {
+        emulator().sensor_payload().as_ptr()
+    }
+
+    #[no_mangle]
+    pub extern "C" fn sensor_payload_len() -> usize {
+        emulator().sensor_payload().len()
+    }
+
+    /// 256-entry lookup from rendered channel value to what the panel shows, for the page's optional
+    /// "panel gamma" display stage.
+    #[no_mangle]
+    pub extern "C" fn panel_display_lut_ptr() -> *const u8 {
+        static mut LUT: Option<[u8; 256]> = None;
+        // SAFETY: single-threaded, non-reentrant ABI (see `emulator`).
+        unsafe {
+            (*core::ptr::addr_of_mut!(LUT))
+                .get_or_insert_with(panel::display_lut)
+                .as_ptr()
+        }
     }
 
     #[no_mangle]
@@ -318,7 +381,7 @@ mod tests {
         let mut now_ms = 0;
         while now_ms < 3000 {
             if now_ms % 100 < 33 {
-                emulator.observe(Reading::Distance(1.2), now_ms);
+                emulator.sensor_reading(Some(1.2), now_ms);
             }
             now_ms += 33;
             emulator.frame(now_ms);
@@ -342,6 +405,39 @@ mod tests {
     #[test]
     fn scripted_run_is_tracking() {
         assert_eq!(scripted_frame().mode(), Mode::Tracking);
+    }
+
+    #[test]
+    fn sensor_payloads_match_porch_sensor() {
+        let cases = [
+            (Some(1.834), "1.83"),
+            (Some(0.0), "0.00"),
+            (Some(4.49), "4.49"),
+            (Some(4.5), "none"),
+            (Some(7.0), "none"),
+            (Some(f32::INFINITY), "none"),
+            (None, "none"),
+        ];
+        for (distance, want) in cases {
+            assert_eq!(porch_sensor_payload(distance), want, "{distance:?}");
+        }
+    }
+
+    #[test]
+    fn beyond_range_readings_never_track() {
+        let mut emulator = Emulator::new(1, 0);
+        for now_ms in (0..2000).step_by(100) {
+            emulator.sensor_reading(Some(4.6), now_ms);
+            emulator.frame(now_ms);
+        }
+        assert_eq!(emulator.mode(), Mode::Idle);
+    }
+
+    #[test]
+    fn malformed_distance_payloads_are_rejected_with_a_reason() {
+        let mut emulator = Emulator::new(1, 0);
+        let accepted = emulator.receive_distance(b"1.2m", 0);
+        assert!(!accepted && !emulator.message().is_empty());
     }
 
     #[test]

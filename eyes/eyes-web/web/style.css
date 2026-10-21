@@ -94,6 +94,8 @@ thead th { color: var(--fog); font-weight: 400; }
 td { text-align: right; }
 
 .hint { color: var(--fog); font-size: 0.875rem; max-width: 36rem; }
+.field .hint { display: block; margin-top: 0.2rem; font-size: 0.8rem; }
+.sensor { margin: 1rem 0 0; color: var(--fog); }
 
 .diagrams {
   display: grid;

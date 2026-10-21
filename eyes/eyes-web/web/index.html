@@ -13,8 +13,8 @@
 <body>
   <header class="masthead">
     <h1>Porch eyes</h1>
-    <p class="lede">The real firmware renderer, running in your browser. Move the visitor and the panel shows
-      exactly the pixels the LEDs will.</p>
+    <p class="lede">The real firmware renderer, running in your browser: the panel shows the same pixels the
+      firmware draws, and with panel gamma on, roughly the light the LEDs give for them.</p>
     <button id="share" type="button" class="quiet">Copy link to this setup</button>
   </header>
 
@@ -32,15 +32,17 @@
             <tr><th scope="row">Right eye</th><td id="yaw-1">–</td><td id="pitch-1">–</td></tr>
           </tbody>
         </table>
+        <p class="sensor">Sensor sends <code id="payload">–</code></p>
         <p class="hint">Angles from each eye to the visitor's face, relative to straight out of the panel.
-          Positive is towards the panel's right as you face it, and up.</p>
+          Positive yaw is towards the panel's right as you stand in front of it facing it; positive pitch is up.</p>
       </div>
     </section>
 
     <section class="diagrams" aria-label="Geometry">
       <figure>
         <svg id="top-view" viewBox="0 0 320 320" role="img" aria-label="Top-down view of the walkway"></svg>
-        <figcaption>From above. Drag the visitor along the walkway.</figcaption>
+        <figcaption>From above, door at the bottom. +x is to the right when standing at the sensor looking
+          down the walkway (the approaching visitor's left). Drag the visitor along the walkway.</figcaption>
       </figure>
       <figure>
         <svg id="side-view" viewBox="0 0 320 200" role="img" aria-label="Side view"></svg>
@@ -61,6 +63,8 @@
         </label>
         <label class="check"><input id="nobody" type="checkbox"> Nobody there (sensor sends <code>none</code>)</label>
         <label class="check"><input id="online" type="checkbox" checked> Sensor online (untick to watch the stale timeout)</label>
+        <label class="check"><input id="gamma" type="checkbox" checked> Panel gamma: show the light the LEDs
+          give (the driver's CIE 1931 curve and 8-bit depth), not the raw rendered colours</label>
         <label class="field">
           <span>Sensor noise</span>
           <span class="pair">
@@ -83,7 +87,7 @@
       <fieldset>
         <legend>Device config</legend>
         <p class="hint">Publish this, retained, to <code>halloween/eyes/config</code>. The device merges it over its
-          provisioned defaults.</p>
+          provisioned defaults, so every key is included.</p>
         <pre id="config-json"></pre>
         <button id="copy-json" type="button" class="quiet">Copy JSON</button>
         <label class="field">

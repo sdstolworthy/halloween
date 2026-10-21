@@ -18,7 +18,8 @@ const required = [
   "memory", "width", "height", "framebuffer_ptr", "framebuffer_len", "reset", "param_count",
   "param_key_ptr", "param_key_len", "param_min", "param_max", "param_step", "param_default",
   "param_value", "set_param", "input_ptr", "input_capacity", "apply_config_json", "message_ptr",
-  "message_len", "observe_distance", "observe_nobody", "frame", "mode", "gaze_yaw_deg",
+  "message_len", "sensor_reading", "sensor_payload_ptr", "sensor_payload_len", "panel_display_lut_ptr",
+  "frame", "mode", "gaze_yaw_deg",
   "gaze_pitch_deg", "eye_position", "panel_normal",
 ];
 const missing = required.filter((name) => !(name in wasm));
@@ -36,7 +37,7 @@ check(wasm.framebuffer_len() === 128 * 64 * 4, "framebuffer is not 128x64 RGBA")
 // Same script as the host test: seed 1, visitor at 1.2 m every 100 ms, frames every 33 ms for 3 s.
 wasm.reset(1, 0);
 for (let now = 0; now < 3000;) {
-  if (now % 100 < 33) wasm.observe_distance(1.2, now);
+  if (now % 100 < 33) wasm.sensor_reading(1.2, now);
   now += 33;
   wasm.frame(now);
 }
@@ -45,6 +46,11 @@ let hash = 0x811c9dc5;
 for (const byte of frame) hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
 check(hash === SCRIPTED_HASH, `scripted frame hash 0x${hash.toString(16)} != 0x${SCRIPTED_HASH.toString(16)}`);
 check(wasm.mode() === 1, "scripted run should be tracking");
+
+wasm.sensor_reading(NaN, 3100);
+check(text(wasm.sensor_payload_ptr(), wasm.sensor_payload_len()) === "none", "no echo should send none");
+wasm.sensor_reading(4.6, 3200);
+check(text(wasm.sensor_payload_ptr(), wasm.sensor_payload_len()) === "none", "beyond 4.5 m should send none");
 
 const maxGaze = keys.indexOf("max_gaze_deg");
 check(wasm.set_param(maxGaze, 120) === 0, "max_gaze_deg 120 should be rejected");
