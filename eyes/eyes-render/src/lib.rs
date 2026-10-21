@@ -53,26 +53,43 @@ where
     let eyes = [Eye::new(pose, 0), Eye::new(pose, 1)];
     let area = Rectangle::new(Point::zero(), Size::new(PANEL_WIDTH, PANEL_HEIGHT));
     let colours = (0..PANEL_HEIGHT).flat_map(move |y| {
+        let row_centre = y as f32 + 0.5;
         (0..PANEL_WIDTH).map(move |x| {
-            let centre = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
-            let eye = &eyes[usize::from(x >= PANEL_WIDTH / 2)];
-            D::Color::from(eye.shade(centre))
+            let eye = &eyes[(x / EYE_COLUMNS) as usize];
+            D::Color::from(eye.shade((x % EYE_COLUMNS) as usize, row_centre))
         })
     });
     target.fill_contiguous(&area, colours)
 }
 
-#[derive(Clone, Copy)]
-/// One eye's per-frame parameters, resolved once so the per-pixel work is plain arithmetic.
-struct Eye {
-    centre: Vec2,
-    iris: Vec2,
-    pupil_radius: f32,
-    /// 0 = open, 1 = shut.
-    closure: f32,
-    /// Lid tilt in pixels per unit of horizontal position, signed so the inner corner drops.
-    tilt: f32,
+/// Each eye owns one half of the panel.
+const EYE_COLUMNS: u32 = PANEL_WIDTH / 2;
+
+/// Everything about a pixel column that doesn't depend on the row, computed once per frame.
+#[derive(Clone, Copy, Default)]
+struct Column {
+    /// Horizontal position across the sclera, -1..1; outside that the column is background.
+    across: f32,
+    upper_lid: f32,
+    lower_lid: f32,
+    /// Pixel-centre x relative to the iris centre.
+    from_iris_x: f32,
 }
+
+#[derive(Clone, Copy)]
+/// One eye's per-frame parameters, resolved once so the per-pixel work is a few multiplies and compares.
+struct Eye {
+    centre_y: f32,
+    iris_y: f32,
+    pupil_radius: f32,
+    pupil_radius_squared: f32,
+    glint: Vec2,
+    columns: [Column; EYE_COLUMNS as usize],
+}
+
+const IRIS_RADIUS_SQUARED: f32 = IRIS_RADIUS_PX * IRIS_RADIUS_PX;
+const LIMBUS_INNER_SQUARED: f32 = (IRIS_RADIUS_PX - 1.2) * (IRIS_RADIUS_PX - 1.2);
+const GLINT_RADIUS_SQUARED: f32 = GLINT_RADIUS_PX * GLINT_RADIUS_PX;
 
 impl Eye {
     fn new(pose: &Pose, index: usize) -> Self {
@@ -80,56 +97,75 @@ impl Eye {
         let centre = Vec2::new(x, y);
         let gaze = sanitise(pose.gaze[index]).clamped_to_unit_disc();
         let squint = unit(pose.squint);
-        // Screen-left eye's nose side is +x, the other eye's is -x.
-        let towards_nose = if index == 0 { 1.0 } else { -1.0 };
+        // Screen y grows downwards while gaze y is up.
+        let iris = centre + Vec2::new(gaze.x * TRAVEL_PX.x, -gaze.y * TRAVEL_PX.y);
+        let pupil_radius = lerp(PUPIL_RADIUS_PX.0, PUPIL_RADIUS_PX.1, unit(pose.dilation));
+        let closure = unit(pose.blink).max(squint);
+        // Screen-left eye's nose side is +x, the other eye's is -x; the lid drops on the nose side.
+        let tilt = if index == 0 { 1.0 } else { -1.0 } * squint * SQUINT_TILT_PX;
+        // The lids follow the sclera's elliptical outline when open and converge on the meeting line as
+        // they close; with `closure` 0 the visible region is exactly the ellipse.
+        let opening = 1.0 - closure;
+        let meet = LID_MEET_PX * closure;
+        let first_column = (index as u32 * EYE_COLUMNS) as f32;
+        let columns = core::array::from_fn(|column| {
+            let pixel_x = first_column + column as f32 + 0.5;
+            let across = (pixel_x - centre.x) / SCLERA.x;
+            let height = if across.abs() < 1.0 {
+                sqrtf(1.0 - across * across)
+            } else {
+                0.0
+            };
+            Column {
+                across,
+                upper_lid: meet - (SCLERA.y + meet) * opening * height + tilt * across,
+                lower_lid: meet + (SCLERA.y - meet) * opening * height,
+                from_iris_x: pixel_x - iris.x,
+            }
+        });
         Self {
-            centre,
-            // Screen y grows downwards while gaze y is up.
-            iris: centre + Vec2::new(gaze.x * TRAVEL_PX.x, -gaze.y * TRAVEL_PX.y),
-            pupil_radius: lerp(PUPIL_RADIUS_PX.0, PUPIL_RADIUS_PX.1, unit(pose.dilation)),
-            closure: unit(pose.blink).max(squint),
-            tilt: towards_nose * squint * SQUINT_TILT_PX,
+            centre_y: centre.y,
+            iris_y: iris.y,
+            pupil_radius,
+            pupil_radius_squared: pupil_radius * pupil_radius,
+            glint: GLINT_OFFSET * pupil_radius,
+            columns,
         }
     }
 
-    fn shade(&self, pixel: Vec2) -> Rgb888 {
-        let offset = pixel - self.centre;
-        let across = offset.x / SCLERA.x;
-        if across.abs() >= 1.0 {
-            return Rgb888::BLACK;
-        }
-        let height = sqrtf(1.0 - across * across);
-        // The lids follow the sclera's elliptical outline when open and converge on the meeting line as
-        // they close; with `closure` 0 the visible region is exactly the ellipse.
-        let opening = 1.0 - self.closure;
-        let meet = LID_MEET_PX * self.closure;
-        let upper_lid = meet - (SCLERA.y + meet) * opening * height + self.tilt * across;
-        let lower_lid = meet + (SCLERA.y - meet) * opening * height;
-        if offset.y <= upper_lid || offset.y >= lower_lid {
+    fn shade(&self, column: usize, row_centre: f32) -> Rgb888 {
+        let column = &self.columns[column];
+        let offset_y = row_centre - self.centre_y;
+        if column.across.abs() >= 1.0
+            || offset_y <= column.upper_lid
+            || offset_y >= column.lower_lid
+        {
             return Rgb888::BLACK;
         }
 
-        let from_iris = pixel - self.iris;
-        let iris_distance = from_iris.length();
-        if iris_distance < self.pupil_radius {
-            let glint = from_iris - GLINT_OFFSET * self.pupil_radius;
-            return if glint.length() < GLINT_RADIUS_PX {
+        let from_iris = Vec2::new(column.from_iris_x, row_centre - self.iris_y);
+        let iris_distance_squared = from_iris.x * from_iris.x + from_iris.y * from_iris.y;
+        if iris_distance_squared < self.pupil_radius_squared {
+            let glint = from_iris - self.glint;
+            return if glint.x * glint.x + glint.y * glint.y < GLINT_RADIUS_SQUARED {
                 GLINT
             } else {
                 Rgb888::BLACK
             };
         }
-        let colour = if iris_distance >= IRIS_RADIUS_PX {
+        let colour = if iris_distance_squared >= IRIS_RADIUS_SQUARED {
             // Darken towards the rim so the eyeball reads as a sphere.
-            let rim = across * across + (offset.y / SCLERA.y) * (offset.y / SCLERA.y);
+            let down = offset_y / SCLERA.y;
+            let rim = column.across * column.across + down * down;
             scale(SCLERA_COLOUR, 1.0 - 0.6 * rim.min(1.0))
-        } else if iris_distance >= IRIS_RADIUS_PX - 1.2 {
+        } else if iris_distance_squared >= LIMBUS_INNER_SQUARED {
             LIMBUS
         } else {
-            let t = (iris_distance - self.pupil_radius) / (IRIS_RADIUS_PX - self.pupil_radius);
+            let t = (sqrtf(iris_distance_squared) - self.pupil_radius)
+                / (IRIS_RADIUS_PX - self.pupil_radius);
             mix(IRIS_INNER, IRIS_OUTER, t)
         };
-        if offset.y - upper_lid < LID_SHADOW_PX {
+        if offset_y - column.upper_lid < LID_SHADOW_PX {
             dim(colour, 0.55)
         } else {
             colour
