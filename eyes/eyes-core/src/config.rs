@@ -11,13 +11,15 @@ use crate::payload::SENSOR_MAX_RANGE_M;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EyesConfig {
-    /// Lateral offset of the panel centre from the sensor's aim axis (+x).
+    /// Sideways offset of the panel centre from the sensor's aim axis. Positive (+x) is to the right when
+    /// standing at the sensor looking down the walkway towards visitors, i.e. the approaching visitor's left.
     pub eyes_offset_x_m: f32,
     /// Offset of the panel centre along the walkway; negative is behind the sensor (towards the door).
     pub eyes_offset_y_m: f32,
     /// Panel centre height above the ground.
     pub eyes_height_m: f32,
-    /// Direction the panel faces; 0 is straight down the walkway (+y), positive turns it towards +x.
+    /// Direction the panel faces; 0 is straight down the walkway (+y). Positive turns the panel's face to
+    /// the right as seen standing at the sensor looking down the walkway (towards +x).
     pub panel_yaw_deg: f32,
     /// Positive tilts the panel to face upwards.
     pub panel_pitch_deg: f32,

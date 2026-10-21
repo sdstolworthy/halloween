@@ -1,7 +1,8 @@
 //! Where each eye has to look.
 //!
 //! World frame (right-handed, metres): origin on the ground directly below the sensor, +y along the
-//! walkway towards the approaching visitor (the sensor's aim axis), +x lateral, +z up. The walkway is
+//! walkway towards the approaching visitor (the sensor's aim axis), +z up, and +x to the right when
+//! standing at the sensor looking down the walkway (the approaching visitor's left). The walkway is
 //! narrow, so the visitor's face is taken to be on the sensor axis at `(0, distance, face_height)`.
 //!
 //! The panel has its own orthonormal frame: `normal` points out of the LEDs towards whoever is watching,
