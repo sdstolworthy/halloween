@@ -9,6 +9,10 @@ import { dirname, join } from "node:path";
 const MID_BLINK_MS = 297;
 const MID_BLINK_HASH = 0x2f020ba7;
 const SETTLED_HASH = 0xf99b39d7;
+// Keep in sync with the_evil_scripted_run_matches_the_smoke_test_hash: the same run with the house turned
+// evil at 990 ms, hashed at the end.
+const EVIL_FROM_MS = 990;
+const EVIL_HASH = 0xbc769620;
 
 const dir = dirname(fileURLToPath(import.meta.url));
 const wasmPath = process.argv[2] ?? join(dir, "eyes_web.wasm");
@@ -22,7 +26,7 @@ const required = [
   "param_key_ptr", "param_key_len", "param_min", "param_max", "param_step", "param_default",
   "param_value", "set_param", "input_ptr", "input_capacity", "apply_config_json", "message_ptr",
   "message_len", "sensor_reading", "sensor_payload_ptr", "sensor_payload_len", "panel_display_lut_ptr",
-  "frame", "mode", "lid", "gaze_moving", "gaze_yaw_deg",
+  "frame", "mode", "lid", "gaze_moving", "publish_mode", "look", "requested_look", "gaze_yaw_deg",
   "gaze_pitch_deg", "eye_position", "panel_normal",
 ];
 const missing = required.filter((name) => !(name in wasm));
@@ -53,6 +57,18 @@ for (let now = 0; now < 3000;) {
   if (now === MID_BLINK_MS) midBlinkHash = frameHash();
 }
 const settledHash = frameHash();
+
+wasm.reset(1, 0);
+for (let now = 0; now < 3000;) {
+  if (now === EVIL_FROM_MS) wasm.publish_mode(1, now);
+  if (now % 100 < 33) wasm.sensor_reading(1.2, now);
+  now += 33;
+  wasm.frame(now);
+}
+const evilHash = frameHash();
+check(wasm.look() === 1, "the evil run should have switched to evil");
+check(evilHash === EVIL_HASH, `evil frame hash 0x${evilHash.toString(16)} != 0x${EVIL_HASH.toString(16)}`);
+wasm.publish_mode(0, 3100);
 const hex = (value) => `0x${(value ?? 0).toString(16)}`;
 check(midBlinkHash === MID_BLINK_HASH, `mid-blink frame hash ${hex(midBlinkHash)} != ${hex(MID_BLINK_HASH)}`);
 check(settledHash === SETTLED_HASH, `settled frame hash ${hex(settledHash)} != ${hex(SETTLED_HASH)}`);
@@ -80,4 +96,4 @@ if (failures.length) {
   failures.forEach((failure) => console.error(`FAIL: ${failure}`));
   process.exit(1);
 }
-console.log(`PASS: ${required.length} exports, ${keys.length} params, scripted frame hashes match host (mid-blink and settled)`);
+console.log(`PASS: ${required.length} exports, ${keys.length} params, scripted frame hashes match host (mid-blink, settled and evil)`);

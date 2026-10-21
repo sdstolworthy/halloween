@@ -18,7 +18,9 @@ pub mod panel;
 use eyes_core::geometry::{PanelFrame, Vec3};
 use eyes_core::layout::{PANEL_HEIGHT, PANEL_WIDTH};
 use eyes_core::payload::SENSOR_MAX_RANGE_M;
-use eyes_core::{parse_distance, Eyes, EyesConfig, Mode, Param, Pose, SplitMix64};
+use eyes_core::{
+    parse_distance, parse_look, Eyes, EyesConfig, Look, LookRequest, Mode, Param, Pose, SplitMix64,
+};
 use eyes_render::Framebuffer;
 
 const FRAMEBUFFER_LEN: usize = (PANEL_WIDTH * PANEL_HEIGHT * 4) as usize;
@@ -124,6 +126,30 @@ impl Emulator {
                 false
             }
         }
+    }
+
+    /// Handle a mode-topic payload exactly as the device does. Returns false (with the reason in
+    /// [`Emulator::message`]) for a payload the device would ignore.
+    pub fn receive_mode(&mut self, payload: &[u8], now_ms: u64) -> bool {
+        match parse_look(payload).map(|look| self.eyes.request_look(look, now_ms)) {
+            Ok(LookRequest::IgnoredAfterTimeout) => {
+                self.set_message("evil timed out after max_evil_s; publish normal to re-arm it");
+                false
+            }
+            Ok(_) => true,
+            Err(error) => {
+                self.set_message(&error.to_string());
+                false
+            }
+        }
+    }
+
+    pub fn look(&self) -> Look {
+        self.eyes.look()
+    }
+
+    pub fn requested_look(&self) -> Look {
+        self.eyes.requested_look()
     }
 
     /// Play porch-sensor seeing something `distance_m` away (`None` = no echo).
@@ -360,6 +386,26 @@ mod abi {
         emulator().gaze_moving() as u32
     }
 
+    /// Publish the house's mode as the scare automation would: 1 = `evil`, 0 = `normal`. Returns 1 if
+    /// the device would accept it.
+    #[no_mangle]
+    pub extern "C" fn publish_mode(evil: u32, now_ms: f64) -> u32 {
+        let payload: &[u8] = if evil != 0 { b"evil" } else { b"normal" };
+        emulator().receive_mode(payload, millis(now_ms)) as u32
+    }
+
+    /// The look being drawn: 0 = normal, 1 = evil.
+    #[no_mangle]
+    pub extern "C" fn look() -> u32 {
+        (emulator().look() == Look::Evil) as u32
+    }
+
+    /// The look being switched to at the next shut lid (equal to `look()` when none is pending).
+    #[no_mangle]
+    pub extern "C" fn requested_look() -> u32 {
+        (emulator().requested_look() == Look::Evil) as u32
+    }
+
     /// 0 = idle, 1 = tracking.
     #[no_mangle]
     pub extern "C" fn mode() -> u32 {
@@ -397,11 +443,19 @@ mod tests {
     use super::*;
 
     /// The scripted run `web/smoke.mjs` replays through the wasm build: seed 1, a visitor holding at
-    /// 1.2 m reported every 100 ms, frames every 33 ms until `until_ms`.
+    /// 1.2 m reported every 100 ms, frames every 33 ms until `until_ms`; with `evil`, the house switches
+    /// to evil at [`EVIL_FROM_MS`].
     fn scripted_frame(until_ms: u64) -> Emulator {
+        scripted_run(until_ms, false)
+    }
+
+    fn scripted_run(until_ms: u64, evil: bool) -> Emulator {
         let mut emulator = Emulator::new(1, 0);
         let mut now_ms = 0;
         while now_ms < until_ms {
+            if evil && now_ms == EVIL_FROM_MS {
+                emulator.receive_mode(b"evil", now_ms);
+            }
             if now_ms % 100 < 33 {
                 emulator.sensor_reading(Some(1.2), now_ms);
             }
@@ -414,6 +468,8 @@ mod tests {
     /// Mid-way through the coupled acquisition blink, so the shared hash pins blink timing too.
     const MID_BLINK_MS: u64 = 297;
     const SETTLED_MS: u64 = 3000;
+    /// A multiple of the 33 ms frame step, so the script hits it exactly.
+    const EVIL_FROM_MS: u64 = 990;
 
     fn fnv1a(bytes: &[u8]) -> u32 {
         bytes.iter().fold(0x811C_9DC5, |hash, &byte| {
@@ -430,6 +486,37 @@ mod tests {
             [hash_at(MID_BLINK_MS), hash_at(SETTLED_MS)],
             [0x2F02_0BA7, 0xF99B_39D7]
         );
+    }
+
+    /// Keep in sync with `EVIL_HASH` in web/smoke.mjs: the same run with the house turned evil at 990 ms,
+    /// at 3 s (switched, brow formed, lids open, tracking).
+    #[test]
+    fn the_evil_scripted_run_matches_the_smoke_test_hash() {
+        assert_eq!(fnv1a(scripted_run(SETTLED_MS, true).rgba()), 0xBC76_9620);
+    }
+
+    #[test]
+    fn the_evil_scripted_frame_is_evil_with_open_lids() {
+        let emulator = scripted_run(SETTLED_MS, true);
+        assert!(emulator.look() == Look::Evil && emulator.last_pose.blink == 0.0);
+    }
+
+    #[test]
+    fn mode_payloads_follow_the_device_rules() {
+        let cases: [(&[u8], bool, Look); 3] = [
+            (b"evil", true, Look::Evil),
+            (b"Normal", true, Look::Normal),
+            (b"haunted", false, Look::Normal),
+        ];
+        for (payload, accepted, want) in cases {
+            let mut emulator = Emulator::new(1, 0);
+            let got = emulator.receive_mode(payload, 0);
+            assert_eq!(
+                (got, emulator.requested_look()),
+                (accepted, want),
+                "{payload:?}"
+            );
+        }
     }
 
     #[test]

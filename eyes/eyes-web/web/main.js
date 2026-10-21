@@ -40,6 +40,7 @@ const PARAM_UI = {
   max_gaze_deg: { label: "Gaze angle at the edge of the eye", unit: "°" },
   max_range_m: { label: "Max range (at or beyond means nobody; the sensor's limit is 4.5 m)", unit: "m" },
   stale_timeout_s: { label: "Go idle after no reading for", unit: "s", slider: [0.2, 10] },
+  max_evil_s: { label: "Evil mode gives up by itself after", unit: "s", slider: [10, 900] },
   brightness: { label: "LED brightness (device only)", unit: "/255" },
 };
 
@@ -113,6 +114,7 @@ function readUrlState(api) {
     seed: Math.trunc(number("seed", 1)) >>> 0,
     gamma: query.get("gamma") !== "0",
     speed: SPEEDS.includes(number("speed", 1)) ? number("speed", 1) : 1,
+    look: query.get("look") === "evil" ? "evil" : "normal",
   };
 }
 
@@ -141,6 +143,7 @@ function writeUrlState(api, state) {
   query.set("seed", String(state.seed));
   if (!state.gamma) query.set("gamma", "0");
   if (state.speed !== 1) query.set("speed", String(state.speed));
+  if (state.look === "evil") query.set("look", "evil");
   history.replaceState(null, "", `${location.pathname}?${query}`);
 }
 
@@ -306,6 +309,17 @@ async function main() {
   // themselves rather than the display.
   let simNow = 0;
   let lastRafMs = null;
+  // When a simulated scare ends (simulated ms), or null.
+  let showEndsAt = null;
+  const SHOW_LENGTH_MS = 10_000;
+  const publishLook = (look) => {
+    state.look = look;
+    const accepted = wasm.publish_mode(look === "evil" ? 1 : 0, simNow) === 1;
+    const status = $("look-status");
+    status.textContent = accepted ? "" : `The device ignores this: ${api.message()}`;
+    status.className = `status ${accepted ? "" : "error"}`;
+    changed();
+  };
   let lastSensorMs = -Infinity;
   let lastReadoutMs = -Infinity;
   let topView = null;
@@ -318,6 +332,7 @@ async function main() {
     $("distance").max = SLIDER_MAX_M;
     $("gamma").checked = state.gamma;
     $("speed").value = String(state.speed);
+    for (const radio of document.querySelectorAll('input[name="look"]')) radio.checked = radio.value === state.look;
     $("distance").value = $("distance-number").value = state.distance.toFixed(2);
     $("nobody").checked = state.nobody;
     $("online").checked = state.online;
@@ -342,6 +357,13 @@ async function main() {
   $("distance-number").addEventListener("change", (event) => { walk = null; setDistance(Number(event.target.value)); });
   $("nobody").addEventListener("change", (event) => { walk = null; state.nobody = event.target.checked; changed(); });
   $("online").addEventListener("change", (event) => { state.online = event.target.checked; changed(); });
+  for (const radio of document.querySelectorAll('input[name="look"]')) {
+    radio.addEventListener("change", () => { showEndsAt = null; publishLook(radio.value); });
+  }
+  $("show").addEventListener("click", () => {
+    showEndsAt = simNow + SHOW_LENGTH_MS;
+    publishLook("evil");
+  });
   $("speed").addEventListener("change", (event) => { state.speed = Number(event.target.value); changed(); });
   $("gamma").addEventListener("change", (event) => { state.gamma = event.target.checked; changed(); });
   $("noise").addEventListener("input", (event) => { state.noise = Number(event.target.value); changed(); });
@@ -353,6 +375,7 @@ async function main() {
     state.seed = (Math.random() * 2 ** 32) >>> 0;
     random = mulberry32(state.seed);
     wasm.reset(state.seed, simNow);
+    if (state.look === "evil") wasm.publish_mode(1, simNow);
     changed();
   });
   $("defaults").addEventListener("click", () => { api.applyJson("{}"); changed(); });
@@ -398,6 +421,11 @@ async function main() {
     $("payload").textContent = state.online ? sensorPayload() : "nothing (sensor offline)";
     $("lid").textContent = `${Math.round(wasm.lid() * 100)}%`;
     $("motion").textContent = wasm.gaze_moving() ? "moving" : "settled";
+    const lookName = (evil) => (evil ? "evil" : "normal");
+    const drawn = lookName(wasm.look() === 1);
+    const requested = lookName(wasm.requested_look() === 1);
+    $("look").textContent = drawn === requested ? drawn : `${drawn}, switching to ${requested} at the next blink`;
+    if (showEndsAt !== null) $("look").textContent += ` (scare ends in ${Math.ceil((showEndsAt - simNow) / 1000)} s)`;
     $("mode").classList.toggle("tracking", tracking);
     for (const eye of [0, 1]) {
       const [yaw, pitch] = api.angles(eye, state.distance);
@@ -413,6 +441,10 @@ async function main() {
     lastRafMs = rafNow;
     simNow += gap * state.speed;
     const now = simNow;
+    if (showEndsAt !== null && now >= showEndsAt) {
+      showEndsAt = null;
+      publishLook("normal");
+    }
     if (walk) {
       const distance = walk.from - (WALK_SPEED_M_S * (now - walk.startMs)) / 1000;
       state.distance = Math.max(WALK_END_M, distance);
@@ -440,6 +472,7 @@ async function main() {
   }
 
   wasm.reset(state.seed, simNow);
+  if (state.look === "evil") wasm.publish_mode(1, simNow);
   changed();
   requestAnimationFrame(frame);
 }

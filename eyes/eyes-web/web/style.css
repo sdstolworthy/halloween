@@ -201,6 +201,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   outline-offset: 2px;
 }
 
+.segmented { display: flex; gap: 1.5rem; margin: 0.75rem 0; }
+.segmented label { display: flex; gap: 0.4rem; align-items: baseline; }
+.segmented input { accent-color: var(--amber); }
+
 .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
 
 .status { min-height: 1.5em; font-size: 0.875rem; }

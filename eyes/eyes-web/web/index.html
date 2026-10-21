@@ -34,6 +34,7 @@
         </table>
         <p class="sensor">Sensor sends <code id="payload">–</code></p>
         <p class="sensor">Lids <span id="lid">–</span> closed, gaze <span id="motion">–</span></p>
+        <p class="sensor">Look: <span id="look">–</span></p>
         <p class="hint">Angles from each eye to the visitor's face, relative to straight out of the panel.
           Positive yaw is towards the panel's right as you stand in front of it facing it; positive pitch is up.</p>
       </div>
@@ -86,6 +87,20 @@
           <button id="walk" type="button">Walk up to the door</button>
           <button id="reseed" type="button" class="quiet">New random seed</button>
         </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>House mode</legend>
+        <p class="hint">Sent as the house's scare automation does, on <code>halloween/eyes/mode</code>. The eyes
+          change look behind a blink.</p>
+        <div class="segmented" role="radiogroup" aria-label="House mode">
+          <label><input type="radio" name="look" value="normal" checked> Normal</label>
+          <label><input type="radio" name="look" value="evil"> Evil</label>
+        </div>
+        <div class="actions">
+          <button id="show" type="button">Simulate a scare (evil for 10 s)</button>
+        </div>
+        <p id="look-status" class="status" role="status"></p>
       </fieldset>
 
       <fieldset>
