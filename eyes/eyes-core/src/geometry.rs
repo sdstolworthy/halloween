@@ -111,6 +111,13 @@ pub struct GazeAngles {
     pub pitch_deg: f32,
 }
 
+impl GazeAngles {
+    /// The target is behind the panel's plane, where an eye can't look.
+    pub fn is_behind(&self) -> bool {
+        self.yaw_deg.abs() > 90.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PanelFrame {
     pub centre: Vec3,

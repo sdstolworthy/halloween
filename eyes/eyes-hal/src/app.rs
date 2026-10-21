@@ -156,6 +156,8 @@ mod tests {
         ];
         for (payload, want) in cases {
             let mut rig = rig();
+            // Two readings: the eyes need consecutive sightings before they notice someone.
+            rig.inbox.push(topics::DISTANCE, payload);
             rig.inbox.push(topics::DISTANCE, payload);
             rig.frame_at(100);
             assert_eq!(rig.app.mode(), want, "{:?}", core::str::from_utf8(payload));

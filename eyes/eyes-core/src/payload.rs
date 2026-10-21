@@ -2,6 +2,9 @@
 
 use core::fmt;
 
+/// porch-sensor's farthest reading. It reports no echo, or anything beyond its own Max range, as `none`.
+pub const SENSOR_MAX_RANGE_M: f32 = 4.5;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Reading {
     /// A measured distance in metres. Values at or beyond the configured max range still mean "nobody";

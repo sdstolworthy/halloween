@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 // Keep in sync with scripted_run_matches_the_smoke_test_hash in eyes-web/src/lib.rs.
-const SCRIPTED_HASH = 0xf83676f9;
+const SCRIPTED_HASH = 0xf99b39d7;
 
 const dir = dirname(fileURLToPath(import.meta.url));
 const wasmPath = process.argv[2] ?? join(dir, "eyes_web.wasm");

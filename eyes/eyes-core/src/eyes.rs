@@ -4,7 +4,7 @@
 //! rendered frame). Both take the current time in milliseconds from a monotonic clock owned by the caller.
 
 use crate::config::EyesConfig;
-use crate::geometry::{gaze_angles, gaze_point, Vec2};
+use crate::geometry::{gaze_angles, gaze_point, GazeAngles, Vec2};
 use crate::motion::{approach, Spring};
 use crate::payload::Reading;
 use crate::rng::Rng;
@@ -24,6 +24,14 @@ const WANDER_REACH: Vec2 = Vec2::new(0.75, 0.35);
 const WANDER_CENTRE_CHANCE: f32 = 0.25;
 /// After a visitor leaves, keep staring where they were for a moment before wandering off.
 const LINGER_MS: u64 = 1500;
+
+/// Debounce for the ultrasonic sensor's dropouts: a visitor is only noticed after this many consecutive
+/// in-range readings, and only let go after "nobody" has been reported continuously for `LEAVE_MS`.
+/// Without it, alternating hits and misses flip the mode (and fire a startled blink) every 100 ms.
+const ENTER_READINGS: u32 = 2;
+const LEAVE_MS: u64 = 500;
+/// At most one startled blink per this long, however often the visitor comes and goes.
+const STARTLE_COOLDOWN_MS: u64 = 3000;
 
 const BLINK_CLOSE_MS: u64 = 70;
 const BLINK_HOLD_MS: u64 = 50;
@@ -72,10 +80,15 @@ impl Pose {
     };
 }
 
-#[derive(Clone, Copy, Debug)]
-struct Observation {
-    distance_m: Option<f32>,
-    at_ms: u64,
+/// What the sensor has said recently, debounced into "is someone there".
+#[derive(Clone, Copy, Debug, Default)]
+struct Presence {
+    /// The most recent in-range reading and when it arrived.
+    last_seen: Option<(f32, u64)>,
+    /// Consecutive in-range readings up to now.
+    streak: u32,
+    /// When "nobody" started being reported after the last in-range reading.
+    absent_since_ms: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -102,7 +115,10 @@ pub struct Eyes<R: Rng> {
     rng: R,
     mode: Mode,
     last_tick_ms: u64,
-    latest: Option<Observation>,
+    presence: Presence,
+    last_startle_ms: Option<u64>,
+    /// Last gaze targets aimed at a visitor in front of the panel; held while the face is behind it.
+    held_targets: [Vec2; 2],
     springs: [Spring; 2],
     wander_target: Vec2,
     next_wander_ms: u64,
@@ -120,7 +136,9 @@ impl<R: Rng> Eyes<R> {
             rng,
             mode: Mode::Idle,
             last_tick_ms: now_ms,
-            latest: None,
+            presence: Presence::default(),
+            last_startle_ms: None,
+            held_targets: [Vec2::ZERO; 2],
             springs: [Spring::default(); 2],
             wander_target: Vec2::ZERO,
             next_wander_ms: now_ms + LINGER_MS,
@@ -146,23 +164,34 @@ impl<R: Rng> Eyes<R> {
     }
 
     pub fn observe(&mut self, reading: Reading, now_ms: u64) {
-        let distance_m = match reading {
-            Reading::Distance(metres) => Some(metres),
-            Reading::Nobody => None,
-        };
-        self.latest = Some(Observation {
-            distance_m,
-            at_ms: now_ms,
-        });
+        let presence = &mut self.presence;
+        match reading {
+            Reading::Distance(metres) if metres < self.config.max_range_m => {
+                presence.last_seen = Some((metres, now_ms));
+                presence.streak = presence.streak.saturating_add(1);
+                presence.absent_since_ms = None;
+            }
+            _ => {
+                presence.streak = 0;
+                presence.absent_since_ms.get_or_insert(now_ms);
+            }
+        }
     }
 
-    /// The visitor's distance if the latest reading is fresh and inside the max range.
+    /// The visitor's distance, debounced: while tracking, the last in-range reading is held through
+    /// dropouts shorter than `LEAVE_MS` and silences shorter than the stale timeout.
     pub fn visitor_distance(&self, now_ms: u64) -> Option<f32> {
-        let latest = self.latest?;
-        let age_s = now_ms.saturating_sub(latest.at_ms) as f32 / 1000.0;
-        let distance_m = latest.distance_m?;
-        (age_s <= self.config.stale_timeout_s && distance_m < self.config.max_range_m)
-            .then_some(distance_m)
+        let (distance_m, seen_ms) = self.presence.last_seen?;
+        let fresh = now_ms.saturating_sub(seen_ms) as f32 / 1000.0 <= self.config.stale_timeout_s;
+        let absent_ms = self
+            .presence
+            .absent_since_ms
+            .map(|since_ms| now_ms.saturating_sub(since_ms));
+        let present = match self.mode {
+            Mode::Idle => self.presence.streak >= ENTER_READINGS,
+            Mode::Tracking => absent_ms.is_none_or(|absent_ms| absent_ms < LEAVE_MS),
+        };
+        (fresh && present && distance_m < self.config.max_range_m).then_some(distance_m)
     }
 
     pub fn tick(&mut self, now_ms: u64) -> Pose {
@@ -175,12 +204,7 @@ impl<R: Rng> Eyes<R> {
         self.update_mode(distance_m.is_some(), now_ms);
 
         let (targets, omega) = match distance_m {
-            Some(distance_m) => {
-                let max_gaze_deg = self.config.max_gaze_deg;
-                let targets = gaze_angles(&self.config, distance_m)
-                    .map(|angles| gaze_point(angles, max_gaze_deg));
-                (targets, TRACK_OMEGA)
-            }
+            Some(distance_m) => (self.tracking_targets(distance_m), TRACK_OMEGA),
             None => ([self.wander(now_ms); 2], IDLE_OMEGA),
         };
         for (spring, target) in self.springs.iter_mut().zip(targets) {
@@ -213,9 +237,12 @@ impl<R: Rng> Eyes<R> {
         };
         match (self.mode, mode) {
             (Mode::Idle, Mode::Tracking) => {
-                // A startled blink on noticing someone.
-                if self.blink.started_ms.is_none() {
+                let startle_due = self
+                    .last_startle_ms
+                    .is_none_or(|last_ms| now_ms.saturating_sub(last_ms) >= STARTLE_COOLDOWN_MS);
+                if startle_due && self.blink.started_ms.is_none() {
                     self.blink.next_ms = now_ms;
+                    self.last_startle_ms = Some(now_ms);
                 }
             }
             (Mode::Tracking, Mode::Idle) => {
@@ -225,6 +252,18 @@ impl<R: Rng> Eyes<R> {
             _ => {}
         }
         self.mode = mode;
+    }
+
+    /// Where each eye should look at a visitor `distance_m` away. A face behind the panel's plane can't be
+    /// looked at (the angles swing past 90 degrees and the eyes would cross), so the last sensible targets
+    /// are held instead.
+    fn tracking_targets(&mut self, distance_m: f32) -> [Vec2; 2] {
+        let angles = gaze_angles(&self.config, distance_m);
+        if !angles.iter().any(GazeAngles::is_behind) {
+            let max_gaze_deg = self.config.max_gaze_deg;
+            self.held_targets = angles.map(|angles| gaze_point(angles, max_gaze_deg));
+        }
+        self.held_targets
     }
 
     fn wander(&mut self, now_ms: u64) -> Vec2 {
@@ -341,57 +380,172 @@ mod tests {
     }
 
     #[test]
-    fn mode_follows_the_latest_reading() {
-        struct Case {
-            name: &'static str,
-            reading: Reading,
-            observed_at_ms: u64,
-            ticked_at_ms: u64,
-            want: Mode,
-        }
-        let cases = [
-            Case {
-                name: "visitor in range",
-                reading: Reading::Distance(2.0),
-                observed_at_ms: 1000,
-                ticked_at_ms: 1000,
-                want: Mode::Tracking,
-            },
-            Case {
-                name: "porch-sensor's nobody value",
-                reading: Reading::Distance(4.5),
-                observed_at_ms: 1000,
-                ticked_at_ms: 1000,
-                want: Mode::Idle,
-            },
-            Case {
-                name: "literal none",
-                reading: Reading::Nobody,
-                observed_at_ms: 1000,
-                ticked_at_ms: 1000,
-                want: Mode::Idle,
-            },
-            Case {
-                name: "just inside the stale timeout",
-                reading: Reading::Distance(2.0),
-                observed_at_ms: 1000,
-                ticked_at_ms: 3000,
-                want: Mode::Tracking,
-            },
-            Case {
-                name: "stale reading",
-                reading: Reading::Distance(2.0),
-                observed_at_ms: 1000,
-                ticked_at_ms: 3001,
-                want: Mode::Idle,
-            },
+    fn idle_eyes_notice_a_visitor_only_after_consecutive_readings() {
+        const HIT: Reading = Reading::Distance(2.0);
+        /// Readings with their arrival times.
+        type Script = &'static [(Reading, u64)];
+        let cases: [(&str, Script, u64, Mode); 7] = [
+            (
+                "one reading is not enough",
+                &[(HIT, 1000)],
+                1000,
+                Mode::Idle,
+            ),
+            (
+                "two in a row",
+                &[(HIT, 900), (HIT, 1000)],
+                1000,
+                Mode::Tracking,
+            ),
+            (
+                "a miss in between restarts the count",
+                &[(HIT, 800), (Reading::Nobody, 900), (HIT, 1000)],
+                1000,
+                Mode::Idle,
+            ),
+            (
+                "porch-sensor's old nobody value",
+                &[
+                    (Reading::Distance(4.5), 900),
+                    (Reading::Distance(4.5), 1000),
+                ],
+                1000,
+                Mode::Idle,
+            ),
+            (
+                "literal none",
+                &[(Reading::Nobody, 900), (Reading::Nobody, 1000)],
+                1000,
+                Mode::Idle,
+            ),
+            (
+                "just inside the stale timeout",
+                &[(HIT, 900), (HIT, 1000)],
+                3000,
+                Mode::Tracking,
+            ),
+            ("stale", &[(HIT, 900), (HIT, 1000)], 3001, Mode::Idle),
         ];
-        for case in cases {
+        for (name, observations, ticked_at_ms, want) in cases {
             let mut eyes = eyes();
-            eyes.observe(case.reading, case.observed_at_ms);
-            eyes.tick(case.ticked_at_ms);
-            assert_eq!(eyes.mode(), case.want, "{}", case.name);
+            for &(reading, at_ms) in observations {
+                eyes.observe(reading, at_ms);
+            }
+            eyes.tick(ticked_at_ms);
+            assert_eq!(eyes.mode(), want, "{name}");
         }
+    }
+
+    /// Starts tracking a visitor at 2 m, then reports `nobody` from `absent_from_ms` and ticks at `now_ms`.
+    fn tracking_then_absent(absent_from_ms: u64, now_ms: u64) -> Mode {
+        let mut eyes = eyes();
+        run(&mut eyes, Some(Reading::Distance(2.0)), 0, absent_from_ms);
+        eyes.observe(Reading::Nobody, absent_from_ms);
+        eyes.tick(now_ms);
+        eyes.mode()
+    }
+
+    #[test]
+    fn tracking_survives_a_short_dropout() {
+        assert_eq!(
+            tracking_then_absent(1000, 1000 + LEAVE_MS - 1),
+            Mode::Tracking
+        );
+    }
+
+    #[test]
+    fn tracking_ends_after_a_sustained_absence() {
+        assert_eq!(tracking_then_absent(1000, 1000 + LEAVE_MS), Mode::Idle);
+    }
+
+    /// Feeds a repeating pattern of readings (true = visitor at 2 m, false = porch-sensor's `none`) every
+    /// 100 ms for 10 s and counts blinks.
+    fn blinks_for_pattern(pattern: &[bool]) -> usize {
+        let mut eyes = eyes();
+        let mut poses = Vec::new();
+        let mut reading_index = 0;
+        for now_ms in (0..=10_000).step_by(FRAME_MS as usize) {
+            while reading_index * 100 <= now_ms as usize {
+                let hit = pattern[reading_index % pattern.len()];
+                let reading = if hit {
+                    Reading::Distance(2.0)
+                } else {
+                    Reading::Nobody
+                };
+                eyes.observe(reading, (reading_index * 100) as u64);
+                reading_index += 1;
+            }
+            poses.push(eyes.tick(now_ms));
+        }
+        blinks(&poses)
+    }
+
+    #[test]
+    fn flaky_readings_do_not_make_the_eyes_flutter() {
+        let steady = blinks_for_pattern(&[true]);
+        let patterns: [(&str, &[bool]); 5] = [
+            ("alternating hit/miss", &[true, false]),
+            ("two hits, one miss", &[true, true, false]),
+            ("hit then three misses", &[true, false, false, false]),
+            (
+                "two hits then five misses",
+                &[true, true, false, false, false, false, false],
+            ),
+            (
+                "half-second on/off",
+                &[
+                    true, true, true, true, true, false, false, false, false, false,
+                ],
+            ),
+        ];
+        for (name, pattern) in patterns {
+            let count = blinks_for_pattern(pattern);
+            // Ordinary blinking plus at most one startle per cooldown period.
+            let limit = steady + (10_000 / STARTLE_COOLDOWN_MS) as usize + 1;
+            assert!(
+                count <= limit,
+                "{name}: {count} blinks in 10 s, steady tracking has {steady}"
+            );
+        }
+    }
+
+    #[test]
+    fn startled_blinks_are_rate_limited() {
+        let mut eyes = eyes();
+        let mut startles = Vec::new();
+        // A visitor appears (two hits), then is reported gone for long enough to go idle, every 0.9 s.
+        for cycle in 0..10u64 {
+            let start_ms = cycle * 900;
+            eyes.observe(Reading::Distance(2.0), start_ms);
+            eyes.observe(Reading::Distance(2.0), start_ms + 100);
+            eyes.tick(start_ms + 100);
+            eyes.observe(Reading::Nobody, start_ms + 200);
+            eyes.tick(start_ms + 200 + LEAVE_MS);
+            if eyes.last_startle_ms != startles.last().copied() {
+                startles.extend(eyes.last_startle_ms);
+            }
+        }
+        assert_eq!(startles, [100, 3700, 7300]);
+    }
+
+    #[test]
+    fn a_face_behind_the_panel_holds_the_last_gaze() {
+        // Panel 2 m down the walkway facing the approaching visitor; once they pass it, their face is
+        // behind the panel's plane.
+        let config = EyesConfig {
+            eyes_offset_x_m: 0.5,
+            eyes_offset_y_m: 2.0,
+            ..EyesConfig::DEFAULT
+        };
+        let mut eyes = Eyes::new(config, SplitMix64::new(1), 0);
+        let in_front = run(&mut eyes, Some(Reading::Distance(3.0)), 0, 2000);
+        let held = run(&mut eyes, Some(Reading::Distance(1.0)), 2000, 4000);
+        let before = in_front.last().unwrap().gaze;
+        let after = held.last().unwrap().gaze;
+        assert!(
+            (before[0] - after[0]).length() < 1e-3 && (before[1] - after[1]).length() < 1e-3,
+            "{before:?} -> {after:?}"
+        );
     }
 
     #[test]
@@ -406,7 +560,8 @@ mod tests {
         let mut eyes = eyes();
         eyes.set_config(EyesConfig::DEFAULT.with(Param::MaxRange, 1.5).unwrap());
         eyes.observe(Reading::Distance(2.0), 0);
-        eyes.tick(0);
+        eyes.observe(Reading::Distance(2.0), 100);
+        eyes.tick(100);
         assert_eq!(eyes.mode(), Mode::Idle);
     }
 
@@ -463,6 +618,7 @@ mod tests {
     #[test]
     fn blink_fully_closes_then_reopens() {
         let mut eyes = eyes();
+        eyes.observe(Reading::Distance(2.0), 0);
         eyes.observe(Reading::Distance(2.0), 0);
         let poses: Vec<Pose> = (0..=BLINK_MS + 10)
             .step_by(10)

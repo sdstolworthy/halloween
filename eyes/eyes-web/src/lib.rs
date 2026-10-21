@@ -336,7 +336,7 @@ mod tests {
     /// what the host (and so the firmware) renders.
     #[test]
     fn scripted_run_matches_the_smoke_test_hash() {
-        assert_eq!(fnv1a(scripted_frame().rgba()), 0xF836_76F9);
+        assert_eq!(fnv1a(scripted_frame().rgba()), 0xF99B_39D7);
     }
 
     #[test]

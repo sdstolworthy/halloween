@@ -7,6 +7,7 @@ use alloc::string::String;
 use core::fmt;
 
 use crate::layout::EYE_SPACING_PX;
+use crate::payload::SENSOR_MAX_RANGE_M;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EyesConfig {
@@ -26,7 +27,7 @@ pub struct EyesConfig {
     pub pixel_pitch_mm: f32,
     /// Gaze angle at which the pupil reaches the edge of its travel.
     pub max_gaze_deg: f32,
-    /// Readings at or beyond this mean nobody is there. porch-sensor reports "nobody" as 4.5 m.
+    /// Readings at or beyond this mean nobody is there. At most the sensor's own range.
     pub max_range_m: f32,
     /// With no reading for this long the eyes go idle, so a dead sensor or broker never freezes them.
     pub stale_timeout_s: f32,
@@ -44,7 +45,7 @@ impl EyesConfig {
         face_height_m: 1.6,
         pixel_pitch_mm: 3.0,
         max_gaze_deg: 55.0,
-        max_range_m: 4.5,
+        max_range_m: SENSOR_MAX_RANGE_M,
         stale_timeout_s: 2.0,
         brightness: 64,
     };
@@ -177,7 +178,9 @@ impl Param {
             Param::FaceHeight => spec("face_height_m", 0.3, 2.5, 0.05),
             Param::PixelPitch => spec("pixel_pitch_mm", 1.0, 10.0, 0.1),
             Param::MaxGaze => spec("max_gaze_deg", 10.0, 85.0, 1.0),
-            Param::MaxRange => spec("max_range_m", 0.5, 10.0, 0.05),
+            // The sensor can't see further, so a larger value could only mistake its far-limit reading
+            // for a visitor.
+            Param::MaxRange => spec("max_range_m", 0.5, SENSOR_MAX_RANGE_M, 0.05),
             Param::StaleTimeout => spec("stale_timeout_s", 0.2, 60.0, 0.1),
             Param::Brightness => ParamSpec {
                 integer: true,
@@ -257,6 +260,8 @@ mod tests {
             (Param::EyesHeight, -0.1, false),
             (Param::PanelYaw, -180.0, true),
             (Param::MaxGaze, 9.0, false),
+            (Param::MaxRange, 4.5, true),
+            (Param::MaxRange, 4.51, false),
             (Param::FaceHeight, f32::NAN, false),
             (Param::EyesOffsetX, f32::INFINITY, false),
             (Param::Brightness, 255.0, true),
