@@ -1,8 +1,8 @@
 # Skeleton Shaker
 
-Halloween porch prop: Home Assistant presses **Dance** → ESP32 → L298N → 12 V gear motor shakes a skeleton string.
-The press comes from the porch scare automation, triggered by the `porch-sensor` distance sensor (see
-[the porch show spec](../docs/specs/2026-10-20-porch-show-design.md)). Full BOM and wiring in
+Halloween porch prop: Home Assistant presses **Dance** → ESP32 → MG90S micro servo tugs a shock cord tied to a
+string of skeletons. The press comes from the porch scare automation, triggered by the `porch-sensor` distance
+sensor (see [the porch show spec](../docs/specs/2026-10-20-porch-show-design.md)). BOM, wiring and design history in
 [HANDOFF.md](HANDOFF.md).
 
 ## Firmware (ESPHome)
@@ -15,11 +15,14 @@ uvx esphome@2026.9.1 logs skeleton-shaker.yaml  # serial/network logs (115200 ba
 
 Entities (in Home Assistant or at `http://skeleton-shaker.local`):
 
-- **Dance** button — runs one dance plus cooldown. Presses during the dance or cooldown are ignored, so
-  overlapping requests can't stack.
-- **Stop** button — aborts and coasts the motor.
-- **State** — idle / dancing / cooldown.
-- Dance/burst/pause/duty/cooldown min-max sliders, persisted across reboots.
+- **Dance** button and `esphome.skeleton_shaker_dance` action — one dance plus cooldown. Requests during the
+  dance or cooldown are ignored, so overlapping requests can't stack.
+- **Stop** button — aborts, centres the horn and detaches the servo.
+- **Dancing** binary sensor.
+- **Dance length** (3–20 s, default 8) and **Cooldown** (0–60 s, default 4), persisted across reboots.
+
+A dance is random moves to 40–140° with 80–300 ms dwell; then the horn returns to 90° and the servo is detached so
+it doesn't buzz or hold current. The sweep and dwell ranges are substitutions at the top of the YAML.
 
 There is no local trigger and no arming switch here; arming lives on the porch sensor. The board reboots after
 15 min without Wi-Fi (ESPHome default) to recover, but not when only Home Assistant is down.
@@ -32,5 +35,10 @@ g++ -std=c++17 -Wall -Wextra -o /tmp/shaker_test tests/shaker_test.cpp && /tmp/s
 
 ## Enclosure
 
-`python3 skeleton_enclosure.py` and `python3 crank_arm.py` regenerate the STLs (deps listed in HANDOFF.md §5).
-The PG7 hole (formerly the mat lead) takes a blank PG7 plug.
+`python3 servo_enclosure.py` regenerates `servo_base.stl` and `servo_lid.stl` (deps in HANDOFF.md §5). It imports
+shared helpers and dimensions from `skeleton_enclosure.py`, so keep both here.
+
+`v1-motor-drive/` holds the v1 gear-motor parts (crank arm and the larger L298N enclosure) for a garland over
+~300 g. Regenerate those from inside that folder (both scripts write to the current directory):
+`cd v1-motor-drive && python3 ../skeleton_enclosure.py && python3 crank_arm.py`. The firmware here would need
+the v1 L298N outputs back (see git history before the servo change).

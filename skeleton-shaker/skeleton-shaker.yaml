@@ -1,3 +1,11 @@
+substitutions:
+  servo_pin: GPIO25
+  # Horn travel and how long it holds each pose; 40-140 deg on the stock ~20 mm horn is ~30 mm of stroke.
+  sweep_min_deg: "40"
+  sweep_max_deg: "140"
+  dwell_min_ms: "80"
+  dwell_max_ms: "300"
+
 esphome:
   name: skeleton-shaker
   friendly_name: Skeleton Shaker
@@ -5,13 +13,12 @@ esphome:
   includes:
     - shaker.h
   on_boot:
-    # 600 runs after the LEDC output's setup; at 800 the ENA write is dropped as "not yet initialized".
+    # A template binary sensor with no lambda never publishes on its own, so Dancing would read "unknown".
     priority: 600
     then:
-      - script.execute: motor_coast
-      - text_sensor.template.publish:
-          id: shaker_state
-          state: idle
+      - binary_sensor.template.publish:
+          id: dancing
+          state: false
 
 esp32:
   board: esp32dev
@@ -34,6 +41,10 @@ api:
   encryption:
     key: !secret api_key
   reboot_timeout: 0s
+  actions:
+    - action: dance
+      then:
+        - script.execute: request_dance
 
 ota:
   - platform: esphome
@@ -57,31 +68,73 @@ web_server:
 globals:
   - id: dance_started_at
     type: uint32_t
-  - id: dance_length_ms
-    type: uint32_t
-  - id: burst_on_ms
-    type: uint32_t
-  - id: burst_pause_ms
-    type: uint32_t
-  - id: cooldown_ms
+  - id: dwell_ms
     type: uint32_t
 
 output:
-  - platform: gpio
-    id: in1
-    pin: GPIO25
-  - platform: gpio
-    id: in2
-    pin: GPIO26
   - platform: ledc
-    id: ena
-    pin: GPIO27
-    frequency: 2000Hz
+    id: servo_pwm
+    pin: ${servo_pin}
+    frequency: 50Hz
+
+# With restore off, the servo's setup detaches it (duty 0), so it boots limp instead of jumping to centre.
+servo:
+  - id: shaker_servo
+    output: servo_pwm
+    min_level: 2.5%
+    # Midway between 500 and 2400 us, so both halves of the -1..1 range scale alike and (deg - 90) / 90 is exact.
+    idle_level: 7.25%
+    max_level: 12.0%
+    transition_length: 0s
+    auto_detach_time: 0s
 
 button:
   - platform: template
     name: Dance
     on_press:
+      - script.execute: request_dance
+  - platform: template
+    name: Stop
+    on_press:
+      - script.stop: dance
+      # Dancing stays on through the final re-centre, so this covers every moment the servo is attached. While
+      # idle or cooling down it is already detached at centre, and re-centring would only twitch it.
+      - if:
+          condition:
+            binary_sensor.is_on: dancing
+          then:
+            - script.execute: servo_rest
+      - binary_sensor.template.publish:
+          id: dancing
+          state: false
+
+binary_sensor:
+  - platform: template
+    id: dancing
+    name: Dancing
+
+number:
+  - <<: *tuning
+    id: dance_length_s
+    name: Dance length
+    unit_of_measurement: s
+    min_value: 3
+    max_value: 20
+    step: 0.5
+    initial_value: 8
+  - <<: *tuning
+    id: cooldown_s
+    name: Cooldown
+    unit_of_measurement: s
+    min_value: 0
+    max_value: 60
+    step: 0.5
+    initial_value: 4
+
+script:
+  # Checking first keeps dropped requests at INFO; mode: single on its own logs each one as a warning.
+  - id: request_dance
+    then:
       - if:
           condition:
             script.is_running: dance
@@ -91,157 +144,50 @@ button:
                 format: "Dance ignored (dancing or cooling down)"
           else:
             - script.execute: dance
-  - platform: template
-    name: Stop
-    on_press:
-      - script.stop: dance
-      - script.execute: motor_coast
-      - text_sensor.template.publish:
-          id: shaker_state
-          state: idle
 
-text_sensor:
-  - platform: template
-    id: shaker_state
-    name: State
-
-number:
-  - <<: *tuning
-    id: dance_min_s
-    name: Dance min
-    unit_of_measurement: s
-    min_value: 1
-    max_value: 30
-    step: 0.5
-    initial_value: 6
-  - <<: *tuning
-    id: dance_max_s
-    name: Dance max
-    unit_of_measurement: s
-    min_value: 1
-    max_value: 30
-    step: 0.5
-    initial_value: 10
-  - <<: *tuning
-    id: burst_min_ms
-    name: Burst min
-    unit_of_measurement: ms
-    min_value: 50
-    max_value: 2000
-    step: 10
-    initial_value: 150
-  - <<: *tuning
-    id: burst_max_ms
-    name: Burst max
-    unit_of_measurement: ms
-    min_value: 50
-    max_value: 2000
-    step: 10
-    initial_value: 500
-  - <<: *tuning
-    id: pause_min_ms
-    name: Pause min
-    unit_of_measurement: ms
-    min_value: 0
-    max_value: 1000
-    step: 10
-    initial_value: 50
-  - <<: *tuning
-    id: pause_max_ms
-    name: Pause max
-    unit_of_measurement: ms
-    min_value: 0
-    max_value: 1000
-    step: 10
-    initial_value: 200
-  - <<: *tuning
-    id: duty_min_pct
-    name: Duty min
-    unit_of_measurement: "%"
-    min_value: 20
-    max_value: 100
-    step: 1
-    initial_value: 50
-  - <<: *tuning
-    id: duty_max_pct
-    name: Duty max
-    unit_of_measurement: "%"
-    min_value: 20
-    max_value: 100
-    step: 1
-    initial_value: 100
-  - <<: *tuning
-    id: cooldown_min_s
-    name: Cooldown min
-    unit_of_measurement: s
-    min_value: 0
-    max_value: 60
-    step: 0.5
-    initial_value: 3
-  - <<: *tuning
-    id: cooldown_max_s
-    name: Cooldown max
-    unit_of_measurement: s
-    min_value: 0
-    max_value: 60
-    step: 0.5
-    initial_value: 5
-
-script:
-  # On the L298N, IN1 == IN2 with ENA high is a hard brake; dropping ENA to 0 is what actually coasts.
-  - id: motor_coast
+  # Centre, give the horn time to get there, then stop pulsing so the servo doesn't buzz or draw holding current.
+  - id: servo_rest
+    mode: restart
     then:
-      - output.set_level:
-          id: ena
+      - servo.write:
+          id: shaker_servo
           level: 0
-      - output.turn_off: in1
-      - output.turn_off: in2
+      - delay: 300ms
+      - servo.detach: shaker_servo
 
-  # mode: single plus the cooldown living inside the script is what makes overlapping Dance presses
-  # (during the dance or the cooldown) no-ops instead of stacked dances.
+  # mode: single plus the cooldown living inside the script is what makes overlapping requests (during the dance
+  # or the cooldown) no-ops instead of stacked dances.
   - id: dance
     mode: single
     then:
+      # A Stop just before this request leaves servo_rest pending; its detach would go limp mid-dance.
+      - script.stop: servo_rest
       - lambda: |-
           id(dance_started_at) = millis();
-          id(dance_length_ms) = shaker::pick_in_range(
-              uint32_t(id(dance_min_s).state * 1000), uint32_t(id(dance_max_s).state * 1000), random_uint32());
-          ESP_LOGI("shaker", "Dancing for %" PRIu32 " ms", id(dance_length_ms));
-      - text_sensor.template.publish:
-          id: shaker_state
-          state: dancing
+          ESP_LOGI("shaker", "Dancing for %.1f s", id(dance_length_s).state);
+      - binary_sensor.template.publish:
+          id: dancing
+          state: true
       - while:
           condition:
-            lambda: return !shaker::elapsed(millis(), id(dance_started_at), id(dance_length_ms));
+            lambda: return !shaker::elapsed(millis(), id(dance_started_at), uint32_t(id(dance_length_s).state * 1000));
           then:
             - lambda: |-
-                auto burst = shaker::plan_burst(
-                    {uint32_t(id(burst_min_ms).state), uint32_t(id(burst_max_ms).state)},
-                    {uint32_t(id(pause_min_ms).state), uint32_t(id(pause_max_ms).state)},
-                    {uint32_t(id(duty_min_pct).state), uint32_t(id(duty_max_pct).state)},
-                    [] { return random_uint32(); });
-                id(in1).set_state(burst.forward);
-                id(in2).set_state(!burst.forward);
-                id(ena).set_level(burst.duty);
-                id(burst_on_ms) = burst.on_ms;
-                id(burst_pause_ms) = burst.pause_ms;
-                ESP_LOGD("shaker", "Burst %s %.0f%% for %" PRIu32 " ms, pause %" PRIu32 " ms", burst.forward ? "fwd" : "rev",
-                         burst.duty * 100, burst.on_ms, burst.pause_ms);
-            - delay: !lambda return id(burst_on_ms);
-            - script.execute: motor_coast
-            - delay: !lambda return id(burst_pause_ms);
-      - script.execute: motor_coast
-      - lambda: |-
-          id(cooldown_ms) = shaker::pick_in_range(
-              uint32_t(id(cooldown_min_s).state * 1000), uint32_t(id(cooldown_max_s).state * 1000), random_uint32());
-          ESP_LOGI("shaker", "Dance done, cooling down for %" PRIu32 " ms", id(cooldown_ms));
-      - text_sensor.template.publish:
-          id: shaker_state
-          state: cooldown
-      - delay: !lambda return id(cooldown_ms);
+                auto move = shaker::plan_move({${sweep_min_deg}, ${sweep_max_deg}}, {${dwell_min_ms}, ${dwell_max_ms}},
+                                              [] { return random_uint32(); });
+                id(shaker_servo).write(move.level);
+                id(dwell_ms) = move.dwell_ms;
+                ESP_LOGD("shaker", "Move to level %.2f, dwell %" PRIu32 " ms", move.level, move.dwell_ms);
+            - delay: !lambda return id(dwell_ms);
+      - script.execute: servo_rest
+      - script.wait: servo_rest
+      - binary_sensor.template.publish:
+          id: dancing
+          state: false
+      - logger.log:
+          level: INFO
+          format: "Dance done, cooling down"
+      - delay: !lambda return uint32_t(id(cooldown_s).state * 1000);
       - logger.log:
           level: INFO
           format: "Ready for the next victim"
-      - text_sensor.template.publish:
-          id: shaker_state
-          state: idle

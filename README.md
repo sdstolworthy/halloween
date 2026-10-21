@@ -12,5 +12,5 @@ ESPHome devices are flashed with `uvx esphome@2026.9.1 run <device>/<device>.yam
 | --- | --- |
 | [eyes](eyes/) | ESP32 + 128x64 HUB75 panel shows eyes that follow visitors using porch-sensor's distance (MQTT), and turn evil when the house publishes scare mode on `halloween/eyes/mode`; Rust firmware plus a browser emulator. |
 | [porch-sensor](porch-sensor/) | ESP32 + 3.3 V HC-SR04 distance sensor; publishes Distance and Visitor to HA, with Trigger distance, Max range and Armed tuning entities, and the raw distance over MQTT for the eyes. |
-| [skeleton-shaker](skeleton-shaker/) | ESP32 + gear motor shakes a string of skeletons when HA presses its Dance button. |
+| [skeleton-shaker](skeleton-shaker/) | ESP32 + MG90S servo shakes a string of skeletons when HA presses its Dance button. |
 | [witch-projector](witch-projector/) | Raspberry Pi + mpv holds a black screen and plays the witch video when HA presses Play witch (MQTT). |

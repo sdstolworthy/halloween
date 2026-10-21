@@ -45,29 +45,46 @@ static void test_elapsed() {
   for (const auto &c : cases) check(shaker::elapsed(c.now, c.start, c.length) == c.want, c.name);
 }
 
-static void test_plan_burst() {
+static void test_degrees_to_level() {
   struct Case {
     const char *name;
-    std::vector<uint32_t> randoms;  // direction, duty, on, pause
-    shaker::Burst want;
+    uint32_t degrees;
+    float want;
   };
   const Case cases[] = {
-      {"odd draw is forward, zero draws give minimums", {1, 0, 0, 0}, {true, 0.50f, 150, 50}},
-      {"even draw is reverse, top draws give maximums", {2, 50, 350, 150}, {false, 1.00f, 500, 200}},
+      {"0 deg is full negative", 0, -1.0f},
+      {"40 deg", 40, -50.0f / 90},
+      {"90 deg is centre", 90, 0.0f},
+      {"140 deg", 140, 50.0f / 90},
+      {"180 deg is full positive", 180, 1.0f},
+      {"beyond 180 clamps", 270, 1.0f},
+  };
+  for (const auto &c : cases) check(std::fabs(shaker::degrees_to_level(c.degrees) - c.want) < 1e-6f, c.name);
+}
+
+static void test_plan_move() {
+  struct Case {
+    const char *name;
+    std::vector<uint32_t> randoms;  // angle, dwell
+    float want_level;
+    uint32_t want_dwell_ms;
+  };
+  const Case cases[] = {
+      {"zero draws give the low angle and shortest dwell", {0, 0}, -50.0f / 90, 80},
+      {"top draws give the high angle and longest dwell", {100, 220}, 50.0f / 90, 300},
   };
   for (const auto &c : cases) {
     size_t next = 0;
-    auto burst = shaker::plan_burst({150, 500}, {50, 200}, {50, 100}, [&] { return c.randoms[next++]; });
-    check(burst.forward == c.want.forward && std::fabs(burst.duty - c.want.duty) < 1e-6f &&
-              burst.on_ms == c.want.on_ms && burst.pause_ms == c.want.pause_ms,
-          c.name);
+    auto move = shaker::plan_move({40, 140}, {80, 300}, [&] { return c.randoms[next++]; });
+    check(std::fabs(move.level - c.want_level) < 1e-6f && move.dwell_ms == c.want_dwell_ms, c.name);
   }
 }
 
 int main() {
   test_pick_in_range();
   test_elapsed();
-  test_plan_burst();
+  test_degrees_to_level();
+  test_plan_move();
   if (failures == 0) std::printf("all tests passed\n");
   return failures == 0 ? 0 : 1;
 }

@@ -78,6 +78,10 @@ can later be merged into another device (shaker or eyes) with a one-line include
 - Restore ESPHome's default Wi-Fi `reboot_timeout` (the prop no longer works offline, so rebooting aids recovery);
   keep `api: reboot_timeout: 0s`.
 - Enclosure unchanged; the now-unused PG7 hole gets a blank PG7 plug.
+- *Superseded 2026-10-20 (later):* the drive moved from the 12 V gear motor + L298N to an MG90S servo on 5 V with
+  a smaller enclosure (`servo_enclosure.py`); v1 parts live in `skeleton-shaker/v1-motor-drive/`. The Dance
+  button and `mode: single` cooldown are unchanged, and the box also exposes an `esphome.skeleton_shaker_dance`
+  action and a Dancing binary sensor. See `skeleton-shaker/HANDOFF.md`.
 - Update `skeleton-shaker/HANDOFF.md` and `skeleton-shaker/README.md` to describe the network-triggered design.
 
 ## witch-projector
@@ -167,7 +171,7 @@ One GFCI outdoor outlet in a weatherproof in-use box; each device gets its own a
 
 | Device | Supply |
 | --- | --- |
-| skeleton-shaker | existing 12 V 3 A adapter (LM2596 makes the ESP32's 5 V) |
+| skeleton-shaker | 5 V 3 A adapter into the box's panel DC jack; ESP32 and servo share the rails |
 | porch-sensor | 5 V 1 A USB adapter |
 | witch-projector | official Pi supply (5.1 V 3 A for Pi 4, 27 W for Pi 5) |
 | WLED | its own supply sized to the LED count, WLED current limiter on |
