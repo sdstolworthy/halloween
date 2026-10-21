@@ -159,6 +159,47 @@ go idle, so a later visitor never inherits it.
 - Randomness only comes from the injected RNG (SplitMix64; the firmware seeds it from `esp_random`, the
   emulator from the URL's `seed`), so identical inputs give identical frames.
 
+## Evil mode
+
+When the house switches into scare mode, the eyes turn evil: black sclera, red pupils, an angry brow.
+
+- **Trigger:** the retained topic `halloween/eyes/mode` (contract below). The scare automation in the
+  homeassistant repo publishes `evil` when the scare starts and `normal` when it ends.
+- **Safety net:** `max_evil_s` (default 300 s). If no `normal` arrives that long after `evil` was first
+  requested, the eyes revert by themselves and log it, so a lost message or a crashed automation can't
+  leave the porch scary all night. The timer runs from the first request: a re-delivered `evil` (the
+  retained message after a reconnect) doesn't extend it. After a timeout, `evil` is ignored until a
+  `normal` re-arms it, so the retained `evil` can't restart the timer on every reconnect. A reboot
+  clears that latch, giving at most one more `max_evil_s` of evil per boot.
+- **Switch hidden by a blink** (animator rule): the look changes only on a frame where the lids are
+  fully shut, so the palette never pops in view.
+  - If a blink that hasn't shut yet is in progress, it carries the switch. Its shut hold is stretched to
+    at least 50 ms so a 30 fps frame always lands on it.
+  - If the blink is already reopening, it finishes first.
+  - Otherwise a routine blink starts (70 ms close ≥ the 65 ms ramp floor, 50 ms shut, 120 ms open).
+  - **Exception** to "no blinking while the tracking gaze moves": a mode change blinks immediately even
+    mid-move, because it's a deliberate event, not a routine blink.
+  - At very low frame rates (the emulator below ~20 fps) the shut hold could fall between frames; the
+    switch frame is then drawn shut rather than ever showing the new palette with the lids open.
+- **Brow:** eases in rather than snapping. It starts growing at the moment of the switch with a 0.2 s
+  time constant, so it is about half formed as the lid finishes reopening and complete within ~0.6 s:
+  the scowl forms as the eye opens. Having it fully formed as the lid opens would mean changing the lid
+  shape while the lid moves, which reads as a twitch. It eases back the same way after switching to
+  normal.
+- **Look:**
+  - Sclera: black, with a faint dark-red rim that brightens towards the edge (8 → 80 red). Pure black on
+    a dark panel would make the eye vanish.
+  - Pupil: red-hot (orange-red core to red edge), inside a darker glowing red iris (140 → 70) with a dark
+    limbus. It blooms a little (3.5 px) onto the sclera; there is no glint.
+  - Brow: each upper lid slants down towards the nose (up to 16 px at the inner corner, mirrored per eye)
+    and the eye narrows by 22%. The brow only ever lowers the lid, never lifting the outer corner above
+    the eyeball, so the eye keeps its shape.
+  - Tracking, vergence, squint and blinks are identical in both looks.
+- **Power:** the evil frame is mostly black, so it draws less LED current than the bone-white normal
+  frame at the same brightness; a test checks total channel intensity at three distances.
+- **Cost:** it reuses the per-column work. Host frame cost (`examples/frame_cost.rs`): normal ~103–106 µs,
+  evil ~98–99 µs. Normal-mode pixels are bit-identical to before (the existing goldens are unchanged).
+
 ## Rendering
 
 Every pixel of the 128x64 frame is shaded analytically — almond sclera with a spherical rim falloff,
@@ -196,6 +237,7 @@ modelled. The renderer output and golden hashes are unaffected.
 | --- | --- | --- | --- | --- |
 | `halloween/porch/distance` | porch-sensor → eyes | Decimal metres as plain text, e.g. `1.83`, or `none` when nothing is seen within the sensor's range. `none`, or any value ≥ `max_range_m`, means nobody. | 0 | no |
 | `halloween/eyes/config` | you → eyes | JSON object with any subset of the config keys below. | 1 | **yes** |
+| `halloween/eyes/mode` | house automation → eyes | `evil` or `normal`, trimmed, any case. Anything else is logged and ignored, and the mode is unchanged. | 1 | **yes** |
 | `halloween/eyes/status` | eyes → broker | `online` on every connect; `offline` as the MQTT last will. | 1 | yes |
 
 - porch-sensor maps "no echo" and "beyond its Max range" to its nobody value (4.5 m, the HC-SR04's
@@ -223,6 +265,7 @@ modelled. The renderer output and golden hashes are unaffected.
 | `max_gaze_deg` | 55 | 10..85 | Gaze angle at which the pupil reaches the edge of its travel. |
 | `max_range_m` | 4.5 | 0.5..4.5 | Readings at or beyond this mean nobody. Capped at the sensor's own range. |
 | `stale_timeout_s` | 2.0 | 0.2..60 | Go idle after this long without a reading. |
+| `max_evil_s` | 300 | 10..3600 | Evil mode reverts to normal by itself after this long without a `normal`. |
 | `brightness` | 64 | 1..255, integer | LED brightness cap. A 128x64 panel at full white draws several amps. |
 
 ## Firmware
@@ -318,7 +361,12 @@ never pairs a cached `main.js` with a new wasm. No compiled wasm is committed.
   drop-oldest) and the buffer ladder.
 - `eyes-web`: ABI-level behaviour, porch-sensor payload formatting, the panel-gamma table, and two pinned
   scripted-run hashes: a frame mid-way through the coupled acquisition blink (297 ms, pinning blink
-  timing) and a settled one; `smoke.mjs` checks the wasm against both.
+  timing), a settled one, and the same run turned evil at 990 ms; `smoke.mjs` checks the wasm against
+  all three.
+- Evil mode: mode payload parsing; the switch happens exactly once and only on a shut frame, for
+  requests with no blink and during each blink phase, at 200 and 30 fps; switching while the tracking
+  gaze moves; brow smoothness; timeout, re-delivery and re-arm rules; the mailbox slot and App routing;
+  evil palette regions, brow shape, current draw below normal, and two evil goldens.
 - `eyes-emulator`: the walk-up script, contact-sheet layout, and the PNG writer.
 - Firmware: `cargo +esp build --release` must succeed. Not runnable here; bench acceptance below.
 

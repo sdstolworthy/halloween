@@ -104,6 +104,7 @@ restarts after 10 s; a failing network is rebuilt with backoff and never stops t
 | --- | --- |
 | `halloween/porch/distance` | Metres as text (`1.83`), from porch-sensor ~10 Hz; `none` when it sees nothing within its range. `none` or ≥ `max_range_m` means nobody. |
 | `halloween/eyes/config` | Retained JSON with any of the keys below, merged over the provisioned defaults. Invalid messages are rejected whole, with a log line. Publish an empty retained message to go back to defaults. |
+| `halloween/eyes/mode` | Retained `evil` or `normal` (any case), from the house's scare automation. Anything else is logged and ignored. |
 | `halloween/eyes/status` | Retained `online`, or `offline` via the last will. |
 
 Tune without reflashing, for example:
@@ -125,11 +126,19 @@ mosquitto_pub -h 10.0.0.84 -u <user> -P <password> -r -t halloween/eyes/config \
 | `max_gaze_deg` | 55 | Angle at which the pupil reaches the edge of the eye. |
 | `max_range_m` | 4.5 | Readings at or beyond this mean nobody. At most 4.5, the sensor's own limit. |
 | `stale_timeout_s` | 2.0 | Go idle after this long without a reading. |
+| `max_evil_s` | 300 | Evil mode gives up and returns to normal after this many seconds without a `normal` (10–3600). |
 | `brightness` | 64 | LED brightness, 1–255. |
 
 The coordinate frame: origin on the ground under the sensor, +y down the walkway towards the street (where
 visitors come from), +z up, and +x to the **right** when standing at the sensor looking down the walkway,
 which is the approaching visitor's **left**. The emulator's top-down view labels +x and both ends.
+
+**Evil mode.** When the house goes into scare mode (`evil` on `halloween/eyes/mode`), the eyes turn black
+with glowing red pupils and an angry, inward-slanting brow. The change always happens behind a blink:
+the lids shut, the look changes, and the scowl forms as they reopen. If no `normal` arrives within
+`max_evil_s` the eyes go back to normal by themselves. A re-delivered retained `evil` doesn't extend that
+time, and after a timeout `evil` is ignored until a `normal` arrives. In the emulator, use **House mode**
+or **Simulate a scare**.
 
 Blinks ride the eye movements: when idle, each glance of 10° or more carries a blink that closes just
 after the eyes start moving and reopens just before they land (smaller glances don't blink, and the eyes
