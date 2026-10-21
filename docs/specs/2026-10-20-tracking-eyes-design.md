@@ -78,7 +78,9 @@ edge of travel, each axis clamped to ±`max_gaze_deg`, and the 2-D result clampe
 
 A face **behind the panel's plane** (either eye's |yaw| > 90°, e.g. a visitor who has walked past a panel
 mounted down the walkway) can't be looked at; rather than swing to the opposite edge and cross the eyes,
-the eyes hold the last gaze aimed at a face in front of them.
+the eyes hold the last gaze aimed at that visitor's face while it was in front of them. If they never saw
+the face in front (nothing held yet), the visitor counts as nobody; the held gaze is cleared when the eyes
+go idle, so a later visitor never inherits it.
 
 ## Behaviour
 
@@ -87,6 +89,10 @@ the eyes hold the last gaze aimed at a face in front of them.
   "nobody" (or `stale_timeout_s` with no readings at all), holding the last in-range distance through
   shorter dropouts. Before this, alternating hit/miss readings flipped the mode every 100 ms (~25
   blinks per 10 s); now every tested dropout pattern gives 2–3, the same as steady tracking.
+  Readings count as consecutive only within 250 ms of each other, so a lone reading after a silence
+  never completes a streak. Deliberate trade-off: a visitor seen on only every other reading never
+  triggers tracking. porch-sensor's 5-sample median filter makes that pattern unlikely for a real person
+  in the beam, and it is exactly the pattern a flapping echo off a railing or plant produces.
 - **Tracking** while a visitor is present. Each eye's gaze follows its target through a critically damped spring
   (ω = 14 rad/s, ~90% of a step in 0.28 s), solved in closed form so it is exact for any frame time and
   never overshoots. This hides the sensor's 10 Hz steps and jitter.
