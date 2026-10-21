@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["eyes-core", "eyes-render", "eyes-emulator", "eyes-web"]
+members = ["eyes-core", "eyes-render", "eyes-hal", "eyes-emulator", "eyes-web"]
 # The firmware builds only under the ESP-IDF toolchain (`cargo +esp`), so it is its own workspace and
 # `cargo test` here never tries to compile it.
 exclude = ["firmware"]

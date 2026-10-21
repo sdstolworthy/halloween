@@ -1,0 +1,11 @@
+[package]
+name = "eyes-hal"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+embedded-graphics.workspace = true
+eyes-core = { path = "../eyes-core" }
+eyes-render = { path = "../eyes-render" }
+log.workspace = true
