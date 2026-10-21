@@ -41,15 +41,30 @@ const MIN_MOVE: f32 = 1e-3;
 const SIMULATION_STEP_S: f32 = 0.002;
 const SIMULATION_HORIZON_S: f32 = 3.0;
 
+/// Neither lid ramp of a coupled blink is ever quicker than this, about a routine blink's 70 ms close, so
+/// the lid never moves more than ~0.08 per 5 ms frame. A coupled blink with less room than both ramps
+/// (`MIN_COUPLED_MS`) before the gaze lands is skipped rather than squeezed into a twitch.
+pub const MIN_RAMP_MS: u64 = 65;
+pub const MIN_COUPLED_MS: u64 = 2 * MIN_RAMP_MS;
+
 /// An ordinary blink while settled: quick close, brief hold, slower open.
 const ROUTINE_CLOSE_MS: u64 = 70;
 const ROUTINE_HOLD_MS: u64 = 50;
 const ROUTINE_OPEN_MS: u64 = 120;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlinkKind {
+    /// A blink on its own while the gaze is still.
+    Routine,
+    /// A blink riding a gaze shift.
+    Coupled,
+}
+
 /// One blink's timeline in absolute milliseconds: closing from `start` to `closed`, shut until `reopen`,
 /// opening until `end`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Blink {
+    pub kind: BlinkKind,
     pub start_ms: u64,
     pub closed_ms: u64,
     pub reopen_ms: u64,
@@ -61,6 +76,7 @@ impl Blink {
         let closed_ms = start_ms + ROUTINE_CLOSE_MS;
         let reopen_ms = closed_ms + ROUTINE_HOLD_MS;
         Self {
+            kind: BlinkKind::Routine,
             start_ms,
             closed_ms,
             reopen_ms,
@@ -76,9 +92,22 @@ impl Blink {
     }
 
     /// A blink coupled to the move that starts at `onset_ms` with each eye's spring in its actual state
-    /// (it may already be moving) heading for its target. Uses whichever eye reaches each point first, so
-    /// the lid is open before either eye lands.
+    /// (it may already be moving) heading for its target, or `None` if the move lands too soon for a
+    /// natural blink (see [`MIN_COUPLED_MS`]).
     pub fn during_move(
+        onset_ms: u64,
+        springs: [Spring; 2],
+        targets: [Vec2; 2],
+        omega: f32,
+    ) -> Option<Self> {
+        Some(Self::move_timeline(onset_ms, springs, targets, omega))
+            .filter(|blink| blink.end_ms - blink.start_ms >= MIN_COUPLED_MS)
+    }
+
+    /// The coupled timeline for a move, however short: every lid event at its progress point, using
+    /// whichever eye reaches each point first so the lid is open before either eye lands. Used directly
+    /// only to retime a blink already under way.
+    pub fn move_timeline(
         onset_ms: u64,
         springs: [Spring; 2],
         targets: [Vec2; 2],
@@ -96,7 +125,8 @@ impl Blink {
     }
 
     /// Lid events at the milliseconds after onset when the move covers [`PROGRESS_POINTS`], with the
-    /// duration clamped to [`BLINK_DURATION_MS`], but never reopening after the gaze has landed.
+    /// duration clamped to [`BLINK_DURATION_MS`], but never reopening after the gaze has landed, and with
+    /// each ramp at least [`MIN_RAMP_MS`] when there is room for both.
     fn at_progress_times(onset_ms: u64, [start, closed, open, settled]: [u64; 4]) -> Self {
         let start_ms = onset_ms + start;
         let settled_ms = (onset_ms + settled).max(start_ms + 2);
@@ -104,10 +134,12 @@ impl Blink {
             .saturating_sub(start_ms)
             .clamp(BLINK_DURATION_MS.0, BLINK_DURATION_MS.1);
         let end_ms = (start_ms + duration_ms).min(settled_ms - 1);
+        let ramp_ms = MIN_RAMP_MS.min((end_ms - start_ms) / 2).max(1);
         let closed_ms = (onset_ms + closed)
             .min((start_ms + end_ms) / 2)
-            .max(start_ms + 1);
+            .clamp(start_ms + ramp_ms, end_ms - ramp_ms);
         Self {
+            kind: BlinkKind::Coupled,
             start_ms,
             closed_ms,
             reopen_ms: closed_ms,
@@ -115,13 +147,11 @@ impl Blink {
         }
     }
 
-    /// This blink, caught at `now_ms`, finished on `target`'s (faster) timeline: it never ends later than
-    /// `target` would, and it carries on from the current closure so the lid never jumps. Closing continues
-    /// to shut at `target`'s shut point; shut stays shut until then; reopening just finishes sooner.
+    /// This blink, already under way at `now_ms`, finished on `target`'s (faster) timeline: it never ends
+    /// later than `target` would, and it carries on from the current closure so the lid never jumps.
+    /// Closing continues to shut at `target`'s shut point; shut stays shut until then; reopening just
+    /// finishes sooner.
     pub fn retimed_to(&self, now_ms: u64, target: Blink) -> Blink {
-        if now_ms < self.start_ms {
-            return target;
-        }
         let closure = self.closure(now_ms);
         let end_ms = self.end_ms.min(target.end_ms).max(now_ms + 1);
         if now_ms < self.closed_ms {
@@ -131,6 +161,7 @@ impl Blink {
             // Back-date the start so the closing ramp passes through the current closure now.
             let lead_ms = closure / (1.0 - closure) * (closed_ms - now_ms) as f32;
             return Blink {
+                kind: BlinkKind::Coupled,
                 start_ms: now_ms.saturating_sub(lead_ms as u64),
                 closed_ms,
                 reopen_ms: closed_ms,
@@ -139,6 +170,7 @@ impl Blink {
         }
         if now_ms < self.reopen_ms {
             return Blink {
+                kind: BlinkKind::Coupled,
                 start_ms: now_ms.saturating_sub(1),
                 closed_ms: now_ms,
                 reopen_ms: target.closed_ms.clamp(now_ms, end_ms - 1),
@@ -149,6 +181,7 @@ impl Blink {
         let span_ms = ((end_ms - now_ms) as f32 / closure.max(f32::EPSILON)) as u64;
         let reopen_ms = end_ms.saturating_sub(span_ms).min(now_ms);
         Blink {
+            kind: BlinkKind::Coupled,
             start_ms: reopen_ms.saturating_sub(1),
             closed_ms: reopen_ms,
             reopen_ms,
@@ -185,8 +218,9 @@ fn progress_times(mut spring: Spring, target: Vec2, omega: f32) -> Option<[u64; 
     }
     let mut times = [None; 4];
     let mut elapsed_s = 0.0;
+    let decay = expf(-omega * SIMULATION_STEP_S);
     while elapsed_s < SIMULATION_HORIZON_S && times[3].is_none() {
-        spring.step(target, omega, SIMULATION_STEP_S);
+        spring.step_with_decay(target, omega, SIMULATION_STEP_S, decay);
         elapsed_s += SIMULATION_STEP_S;
         let covered = 1.0 - (target - spring.position).length() / distance;
         for (time, progress) in times.iter_mut().zip(PROGRESS_POINTS) {
@@ -303,7 +337,7 @@ mod tests {
     fn a_move_from_rest_matches_the_reference_schedule() {
         let springs = [Spring::default(); 2];
         let targets = [Vec2::new(0.6, 0.0); 2];
-        let simulated = Blink::during_move(0, springs, targets, 14.0);
+        let simulated = Blink::move_timeline(0, springs, targets, 14.0);
         let reference = Blink::during_shift(0, 14.0);
         let offsets = |blink: Blink| [blink.start_ms, blink.closed_ms, blink.end_ms];
         let close = offsets(simulated)
@@ -320,8 +354,8 @@ mod tests {
             velocity: Vec2::new(2.0, 0.0),
         };
         let target = [Vec2::new(0.6, 0.0); 2];
-        let from_rest = Blink::during_move(0, [Spring::at(Vec2::new(0.2, 0.0)); 2], target, 14.0);
-        let already_moving = Blink::during_move(0, [moving; 2], target, 14.0);
+        let from_rest = Blink::move_timeline(0, [Spring::at(Vec2::new(0.2, 0.0)); 2], target, 14.0);
+        let already_moving = Blink::move_timeline(0, [moving; 2], target, 14.0);
         assert!(
             already_moving.end_ms < from_rest.end_ms,
             "{already_moving:?} vs {from_rest:?}"
@@ -335,9 +369,53 @@ mod tests {
         assert!(blink.end_ms < 60, "{blink:?}");
     }
 
+    /// Largest change in closure between consecutive 5 ms frames over the whole blink.
+    fn steepest_frame_change(blink: Blink) -> f32 {
+        (blink.start_ms..=blink.end_ms + 5)
+            .step_by(5)
+            .map(|now_ms| (blink.closure(now_ms + 5) - blink.closure(now_ms)).abs())
+            .fold(0.0, f32::max)
+    }
+
+    /// Each eye at the origin moving at `speed` along +x, heading for `distance` along +x.
+    fn moving_towards(speed: f32, distance: f32) -> ([Spring; 2], [Vec2; 2]) {
+        let spring = Spring {
+            position: Vec2::ZERO,
+            velocity: Vec2::new(speed, 0.0),
+        };
+        ([spring; 2], [Vec2::new(distance, 0.0); 2])
+    }
+
+    #[test]
+    fn coupled_blinks_are_natural_or_skipped() {
+        for omega in [6.0, 14.0] {
+            for speed_tenths in -20..=20 {
+                for distance_fiftieths in 1..=50 {
+                    let (springs, targets) =
+                        moving_towards(speed_tenths as f32 * 0.1, distance_fiftieths as f32 * 0.02);
+                    if let Some(blink) = Blink::during_move(0, springs, targets, omega) {
+                        let steepest = steepest_frame_change(blink);
+                        assert!(
+                            steepest <= 0.08,
+                            "ω {omega}: {blink:?} moves {steepest} per 5 ms"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_move_landing_too_soon_skips_its_blink() {
+        // Already racing towards a target 2 cm of the disc away: lands within a few tens of ms.
+        let (springs, targets) = moving_towards(1.9, 0.02);
+        assert_eq!(Blink::during_move(0, springs, targets, 14.0), None);
+    }
+
     #[test]
     fn closure_follows_the_timeline() {
         let blink = Blink {
+            kind: BlinkKind::Coupled,
             start_ms: 100,
             closed_ms: 200,
             reopen_ms: 250,

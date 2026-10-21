@@ -3,7 +3,7 @@
 //! Inputs arrive as [`Eyes::observe`] (a sensor reading, ~10 Hz, noisy) and [`Eyes::tick`] (once per
 //! rendered frame). Both take the current time in milliseconds from a monotonic clock owned by the caller.
 
-use crate::blink::Blink;
+use crate::blink::{Blink, BlinkKind};
 use crate::config::EyesConfig;
 use crate::geometry::{gaze_angles, gaze_point, gaze_shift_deg, GazeAngles, Vec2};
 use crate::motion::{approach, Spring};
@@ -266,18 +266,24 @@ impl<R: Rng> Eyes<R> {
                     .is_none_or(|last_ms| now_ms.saturating_sub(last_ms) >= STARTLE_COOLDOWN_MS);
                 // The acquisition move is a saccade, so its blink is coupled to the move. A blink already
                 // under way (an idle saccade's, on a slower spring) is retimed to land with the tracking
-                // gaze instead of still being shut after the eyes have arrived.
+                // gaze instead of still being shut after the eyes have arrived. One scheduled but not yet
+                // started belongs to the abandoned idle glance, so it is dropped and the acquisition blink
+                // is subject to the startle rate limit like any other.
                 let targets = tracking_targets.unwrap_or_default();
-                let acquisition = Blink::during_move(now_ms, self.springs, targets, TRACK_OMEGA);
-                match self.blink {
-                    Some(blink) if !blink.is_over(now_ms) => {
-                        self.blink = Some(blink.retimed_to(now_ms, acquisition));
-                    }
-                    _ if startle_due => {
+                let under_way = self
+                    .blink
+                    .filter(|blink| now_ms >= blink.start_ms && !blink.is_over(now_ms));
+                if let Some(blink) = under_way {
+                    let timeline = Blink::move_timeline(now_ms, self.springs, targets, TRACK_OMEGA);
+                    self.blink = Some(blink.retimed_to(now_ms, timeline));
+                } else {
+                    self.blink = None;
+                    let acquisition =
+                        Blink::during_move(now_ms, self.springs, targets, TRACK_OMEGA);
+                    if let Some(acquisition) = acquisition.filter(|_| startle_due) {
                         self.start_blink(acquisition);
                         self.last_startle_ms = Some(now_ms);
                     }
-                    _ => {}
                 }
                 self.schedule_routine_blink(now_ms, false);
             }
@@ -350,12 +356,9 @@ impl<R: Rng> Eyes<R> {
         let threshold_deg = SACCADE_THRESHOLD_DEG.min(max_gaze_deg * SACCADE_THRESHOLD_OF_MAX_GAZE);
         let is_saccade = gaze_shift_deg(self.gaze_centre(), target, max_gaze_deg) >= threshold_deg;
         if is_saccade && self.blink.is_none() {
-            self.start_blink(Blink::during_move(
-                now_ms,
-                self.springs,
-                [target; 2],
-                IDLE_OMEGA,
-            ));
+            if let Some(blink) = Blink::during_move(now_ms, self.springs, [target; 2], IDLE_OMEGA) {
+                self.start_blink(blink);
+            }
         }
         self.wander_target = target;
     }
@@ -389,7 +392,7 @@ impl<R: Rng> Eyes<R> {
         if let Some(blink) = self.blink.filter(|blink| blink.is_over(now_ms)) {
             self.blink = None;
             if self.mode == Mode::Tracking {
-                self.schedule_routine_blink(now_ms, blink == Blink::routine(blink.start_ms));
+                self.schedule_routine_blink(now_ms, blink.kind == BlinkKind::Routine);
             }
         }
         let routine_due = self.mode == Mode::Tracking
@@ -718,7 +721,7 @@ mod tests {
         eyes.tick(1000);
         let targets = expected_gaze(eyes.config(), 1.0);
         let coupled = Blink::during_move(1000, [Spring::default(); 2], targets, TRACK_OMEGA);
-        assert_eq!(eyes.blink, Some(coupled));
+        assert_eq!(eyes.blink, coupled);
     }
 
     /// Ticks idle eyes for a minute and returns, for each blink, whether a new glance started on the same
@@ -837,6 +840,98 @@ mod tests {
                 blinks(&poses)
             );
         }
+    }
+
+    /// Largest lid change in one 5 ms frame over the 1.5 s after a visitor 1.5 m away is acquired by
+    /// idle eyes that have been wandering since t = 0, for acquisitions all through an idle period.
+    fn steepest_lid_change_around_acquisitions(seed: u64) -> f32 {
+        (3000..30_000)
+            .step_by(2473)
+            .map(|acquire_ms| {
+                let mut eyes = Eyes::new(EyesConfig::DEFAULT, SplitMix64::new(seed), 0);
+                let mut previous = 0.0;
+                let mut steepest = 0.0_f32;
+                for now_ms in (0..acquire_ms + 1500).step_by(5) {
+                    if now_ms >= acquire_ms - 100 && now_ms % 100 == acquire_ms % 100 {
+                        eyes.observe(Reading::Distance(1.5), now_ms);
+                    }
+                    let lid = eyes.tick(now_ms).blink;
+                    steepest = steepest.max((lid - previous).abs());
+                    previous = lid;
+                }
+                steepest
+            })
+            .fold(0.0, f32::max)
+    }
+
+    #[test]
+    fn acquisitions_never_make_the_lid_jump() {
+        for seed in 1..=3 {
+            let steepest = steepest_lid_change_around_acquisitions(seed);
+            assert!(
+                steepest <= 0.08,
+                "seed {seed}: lid moved {steepest} in one frame"
+            );
+        }
+    }
+
+    #[test]
+    fn fresh_acquisition_blinks_never_make_the_lid_jump_even_when_the_eyes_are_already_moving() {
+        // How far along the way to the visitor the eyes already are, and how fast they are heading there.
+        for covered in [0.0, 0.3, 0.6, 0.9, 0.97] {
+            for speed in [0.0, 0.5, 1.0, 2.0, 3.0] {
+                let mut eyes = eyes();
+                let target = expected_gaze(eyes.config(), 1.5);
+                eyes.springs = target.map(|aim| Spring {
+                    position: aim * covered,
+                    velocity: aim * speed,
+                });
+                eyes.next_wander_ms = u64::MAX;
+                eyes.observe(Reading::Distance(1.5), 900);
+                let mut previous = 0.0;
+                let mut steepest = 0.0_f32;
+                for now_ms in (1000..1600).step_by(5) {
+                    if now_ms % 100 == 0 {
+                        eyes.observe(Reading::Distance(1.5), now_ms);
+                    }
+                    let lid = eyes.tick(now_ms).blink;
+                    steepest = steepest.max((lid - previous).abs());
+                    previous = lid;
+                }
+                assert!(
+                    steepest <= 0.08,
+                    "covered {covered}, speed {speed}: lid moved {steepest} in one frame"
+                );
+            }
+        }
+    }
+
+    /// Idle eyes with a large glance's blink scheduled at t = 1000 (it starts closing ~100 ms later); a
+    /// visitor is acquired at t = 1010, before the lid has moved.
+    fn acquire_before_the_idle_blink_starts(last_startle_ms: Option<u64>) -> Eyes<SplitMix64> {
+        let mut eyes = eyes();
+        eyes.next_wander_ms = u64::MAX;
+        eyes.last_startle_ms = last_startle_ms;
+        eyes.tick(1000);
+        eyes.shift_gaze(Vec2::new(-0.7, 0.0), 1000);
+        eyes.observe(Reading::Distance(1.5), 910);
+        eyes.observe(Reading::Distance(1.5), 1010);
+        eyes.tick(1010);
+        eyes
+    }
+
+    #[test]
+    fn a_pending_idle_blink_is_dropped_when_the_startle_is_not_due() {
+        let eyes = acquire_before_the_idle_blink_starts(Some(0));
+        assert_eq!((eyes.mode(), eyes.blink), (Mode::Tracking, None));
+    }
+
+    #[test]
+    fn a_pending_idle_blink_gives_way_to_a_rate_limited_acquisition_blink() {
+        let eyes = acquire_before_the_idle_blink_starts(None);
+        let blink = eyes.blink.unwrap();
+        let stamped = eyes.last_startle_ms == Some(1010) && eyes.last_blink_ms == blink.start_ms;
+        assert!(stamped && blink.start_ms > 1010, "{blink:?}");
     }
 
     #[test]

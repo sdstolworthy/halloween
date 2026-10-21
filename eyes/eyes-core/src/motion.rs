@@ -23,8 +23,12 @@ impl Spring {
     /// Advance by `dt_s` towards `target`. `omega` (rad/s) sets the speed: the spring covers ~90% of a
     /// step change in about 3.9 / omega seconds.
     pub fn step(&mut self, target: Vec2, omega: f32, dt_s: f32) {
+        self.step_with_decay(target, omega, dt_s, expf(-omega * dt_s));
+    }
+
+    /// [`Spring::step`] with `decay = e^(-omega * dt_s)` supplied, for callers taking many equal steps.
+    pub fn step_with_decay(&mut self, target: Vec2, omega: f32, dt_s: f32, decay: f32) {
         let offset = self.position - target;
-        let decay = expf(-omega * dt_s);
         let slope = self.velocity + offset * omega;
         self.position = target + (offset + slope * dt_s) * decay;
         self.velocity = (self.velocity - slope * (omega * dt_s)) * decay;
@@ -78,6 +82,18 @@ mod tests {
         let mut spring = Spring::default();
         spring.step(Vec2::new(0.5, 0.5), 12.0, 30.0);
         assert!((spring.position - Vec2::new(0.5, 0.5)).length() < 1e-6);
+    }
+
+    #[test]
+    fn a_supplied_decay_steps_exactly_like_step() {
+        let start = Spring {
+            position: Vec2::new(0.3, -0.1),
+            velocity: Vec2::new(1.0, 0.5),
+        };
+        let (mut plain, mut supplied) = (start, start);
+        plain.step(Vec2::new(0.8, 0.2), 9.0, 0.02);
+        supplied.step_with_decay(Vec2::new(0.8, 0.2), 9.0, 0.02, expf(-9.0 * 0.02));
+        assert_eq!(plain, supplied);
     }
 
     #[test]
