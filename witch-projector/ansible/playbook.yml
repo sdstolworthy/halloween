@@ -1,0 +1,149 @@
+- name: Configure the witch projector
+  hosts: all
+  become: true
+  tasks:
+    - name: Install mpv and venv support
+      ansible.builtin.apt:
+        name: [mpv, python3-venv]
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create the witch service user
+      ansible.builtin.user:
+        name: witch
+        system: true
+        home: "{{ witch_home }}"
+        create_home: false
+        shell: /usr/sbin/nologin
+        groups: [video, render, audio]
+        append: true
+
+    - name: Create the install and config directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ witch_home }}", group: root, mode: "0755" }
+        - { path: "{{ witch_home }}/src", group: root, mode: "0755" }
+        - { path: /etc/witch, group: witch, mode: "0750" }
+
+    - name: Copy the bridge source
+      ansible.builtin.copy:
+        src: "{{ witch_source }}/{{ item }}"
+        dest: "{{ witch_home }}/src/"
+        mode: preserve
+      loop: [witch_bridge, pyproject.toml]
+      register: bridge_source
+
+    - name: Create the virtualenv
+      ansible.builtin.command: python3 -m venv {{ witch_home }}/venv
+      args:
+        creates: "{{ witch_home }}/venv/bin/python"
+      register: venv
+
+    # The package version doesn't change between edits, so a plain upgrade would skip changed source.
+    - name: Install the bridge into the virtualenv
+      ansible.builtin.command: "{{ witch_home }}/venv/bin/pip install --upgrade --force-reinstall {{ witch_home }}/src"
+      changed_when: true
+      when: bridge_source is changed or venv is changed
+      notify: Restart witch-bridge
+
+    - name: Write the bridge environment file
+      ansible.builtin.template:
+        src: bridge.env.j2
+        dest: /etc/witch/bridge.env
+        owner: root
+        group: witch
+        mode: "0640"
+      no_log: true
+      notify: Restart witch-bridge
+
+    - name: Look for the witch video
+      ansible.builtin.stat:
+        path: "{{ witch_video_src }}"
+      register: video
+
+    - name: Copy the witch video
+      ansible.builtin.copy:
+        src: "{{ witch_video_src }}"
+        dest: "{{ witch_home }}/witch.mp4"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      when: video.stat.exists
+
+    - name: Install the mpv unit
+      ansible.builtin.copy:
+        src: "{{ witch_source }}/systemd/witch-mpv.service"
+        dest: /etc/systemd/system/witch-mpv.service
+        owner: root
+        group: root
+        mode: "0644"
+      register: mpv_unit
+      notify: Restart witch-mpv
+      tags: [systemd]
+
+    - name: Install the bridge unit
+      ansible.builtin.copy:
+        src: "{{ witch_source }}/systemd/witch-bridge.service"
+        dest: /etc/systemd/system/witch-bridge.service
+        owner: root
+        group: root
+        mode: "0644"
+      register: bridge_unit
+      notify: Restart witch-bridge
+      tags: [systemd]
+
+    - name: Enable and start the services
+      ansible.builtin.systemd:
+        name: "{{ item }}.service"
+        enabled: true
+        state: started
+        daemon_reload: "{{ mpv_unit is changed or bridge_unit is changed }}"
+      loop: [witch-mpv, witch-bridge]
+      tags: [systemd]
+
+    - name: Apply pending restarts before verifying
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for mpv's control socket
+      ansible.builtin.wait_for:
+        path: /run/witch/mpv.sock
+        timeout: 30
+      tags: [systemd]
+
+    - name: Gather service state
+      ansible.builtin.service_facts:
+      tags: [systemd]
+
+    - name: Check both services are running
+      ansible.builtin.assert:
+        that: ansible_facts.services[item ~ '.service'].state == 'running'
+        fail_msg: "{{ item }} is not running; see journalctl -u {{ item }}"
+        quiet: true
+      loop: [witch-mpv, witch-bridge]
+      tags: [systemd]
+
+    - name: Warn about the missing video
+      ansible.builtin.debug:
+        msg: >-
+          No video at {{ witch_video_src }}. Everything else is set up and the screen idles black;
+          rerun install.sh with the video's path to add it.
+      when: not video.stat.exists
+
+  handlers:
+    - name: Restart witch-mpv
+      ansible.builtin.systemd:
+        name: witch-mpv.service
+        state: restarted
+        daemon_reload: true
+
+    - name: Restart witch-bridge
+      ansible.builtin.systemd:
+        name: witch-bridge.service
+        state: restarted
+        daemon_reload: true

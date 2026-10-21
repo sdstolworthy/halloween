@@ -20,12 +20,22 @@ The bridge reconnects to MQTT and to the mpv socket on its own; systemd restarts
 Raspberry Pi 4 or 5, Raspberry Pi OS Lite (Bookworm), projector on HDMI 0.
 
 ```sh
-sudo ./install.sh                         # mpv, venv in /opt/witch/venv, units, /etc/witch/bridge.env template
-sudo nano /etc/witch/bridge.env           # broker host/port/credentials (never committed)
-sudo cp witch.mp4 /opt/witch/witch.mp4    # the video is not in git
-sudo systemctl restart witch-bridge
+git clone <halloween repo> && cd halloween
+scp workstation:witch.mp4 ~/witch.mp4        # the video is not in git
+./witch-projector/install.sh ~/witch.mp4     # installs ansible-core if needed, then runs the playbook
 journalctl -fu witch-bridge -u witch-mpv
 ```
+
+`install.sh` runs `ansible/playbook.yml` against the Pi itself. It is safe to rerun, and rerunning is how changes
+are deployed: `git pull && ./witch-projector/install.sh ~/witch.mp4`. Without a video it still sets everything
+up, leaves the screen black, and says so at the end.
+
+The playbook writes `/etc/witch/bridge.env` from `ansible/templates/bridge.env.j2`, so edit
+`ansible/group_vars/all/vars.yml` rather than the file on the Pi. The MQTT password is in
+`ansible/group_vars/all/vault.yml` (Ansible Vault). `install.sh` asks for the vault password unless
+`~/.config/halloween/vault-pass` exists. The broker user is `witch-projector`, defined in the homeassistant repo's
+`apps/mosquitto/sealed-secrets.yaml`. To view or rotate the password, run
+`ansible-vault edit ansible/group_vars/all/vault.yml`, then re-add the user's hash to that passwordfile.
 
 Audio goes to HDMI 0 by default (`--audio-device` in `systemd/witch-mpv.service`; list devices with
 `mpv --audio-device=help`).

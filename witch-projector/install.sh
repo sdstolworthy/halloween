@@ -1,32 +1,27 @@
 #!/usr/bin/env bash
-# Run on the Pi from a checkout of witch-projector/: sudo ./install.sh
+# Run on the Pi from a checkout of the halloween repo: ./witch-projector/install.sh [path/to/witch.mp4]
 set -euo pipefail
-cd "$(dirname "$0")"
 
-if [[ $EUID -ne 0 ]]; then
-  echo "Run with sudo." >&2
-  exit 1
+export WITCH_VIDEO_SRC
+WITCH_VIDEO_SRC="$(realpath -m "${1:-$HOME/witch.mp4}")"
+vault_pass_file="$HOME/.config/halloween/vault-pass"
+
+as_root() { if [[ $EUID -eq 0 ]]; then "$@"; else sudo "$@"; fi; }
+
+if ! command -v ansible >/dev/null || ! command -v ansible-playbook >/dev/null; then
+  as_root apt-get update
+  as_root apt-get install -y ansible-core
 fi
 
-apt-get update
-apt-get install -y mpv python3-venv
-
-id witch &>/dev/null || useradd --system --home-dir /opt/witch --shell /usr/sbin/nologin witch
-usermod -aG video,render,audio witch
-
-install -d -m 0755 /opt/witch
-python3 -m venv /opt/witch/venv
-/opt/witch/venv/bin/pip install --upgrade .
-
-install -d -m 0750 -g witch /etc/witch
-if [[ ! -e /etc/witch/bridge.env ]]; then
-  install -m 0640 -g witch bridge.env.example /etc/witch/bridge.env
+args=(playbook.yml)
+if [[ -s "$vault_pass_file" ]]; then
+  args+=(--vault-password-file "$vault_pass_file")
+else
+  args+=(--ask-vault-pass)
+fi
+if [[ $EUID -ne 0 ]] && ! sudo -n true 2>/dev/null; then
+  args+=(--ask-become-pass)
 fi
 
-install -m 0644 systemd/witch-mpv.service systemd/witch-bridge.service /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable witch-mpv.service witch-bridge.service
-systemctl restart witch-mpv.service witch-bridge.service
-
-[[ -e /opt/witch/witch.mp4 ]] || echo "Copy the video to /opt/witch/witch.mp4."
-echo "Fill in /etc/witch/bridge.env, then: sudo systemctl restart witch-bridge"
+cd "$(dirname "$0")/ansible"
+exec ansible-playbook "${args[@]}" "${@:2}"

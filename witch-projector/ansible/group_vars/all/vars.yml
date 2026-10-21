@@ -1,0 +1,11 @@
+# Mosquitto runs with hostNetwork on the k3s control-plane node.
+mqtt_host: 10.0.0.84
+mqtt_port: 1883
+mqtt_username: witch-projector
+mqtt_password: "{{ vault_mqtt_password }}"
+
+witch_home: /opt/witch
+witch_source: "{{ playbook_dir }}/.."
+# install.sh sets WITCH_VIDEO_SRC from its argument; passing it through the environment avoids -e quoting problems
+# with paths that contain spaces.
+witch_video_src: "{{ lookup('ansible.builtin.env', 'WITCH_VIDEO_SRC') }}"

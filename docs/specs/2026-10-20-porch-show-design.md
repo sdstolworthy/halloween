@@ -109,8 +109,10 @@ can later be merged into another device (shaker or eyes) with a one-line include
 ### Deployment
 
 - `witch-projector/systemd/`: `witch-mpv.service`, `witch-bridge.service` (both `Restart=always`, enabled at boot).
-- `witch-projector/install.sh`: run on the Pi; installs mpv via apt, the bridge into a virtualenv, the units, and
-  a template `bridge.env`.
+- `witch-projector/install.sh`: run on the Pi from a repo checkout. It installs `ansible-core` if needed, then
+  runs `witch-projector/ansible/playbook.yml` against localhost. The playbook installs mpv, the bridge
+  virtualenv, the units, the video, and `/etc/witch/bridge.env` rendered from Ansible Vault, and it is safe to
+  rerun. The broker user `witch-projector` lives in the homeassistant repo's Mosquitto passwordfile.
 
 ## Porch scare automation
 
@@ -185,6 +187,7 @@ halloween/
     ├── witch_bridge/
     ├── tests/
     ├── systemd/
+    ├── ansible/
     └── install.sh
 ```
 
