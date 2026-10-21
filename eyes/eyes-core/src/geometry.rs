@@ -11,7 +11,7 @@
 
 use core::ops::{Add, Mul, Sub};
 
-use libm::{atan2f, cosf, sinf, sqrtf};
+use libm::{asinf, atan2f, cosf, sinf, sqrtf};
 
 use crate::config::EyesConfig;
 use crate::layout::{EYE_CENTRES_PX, PANEL_HEIGHT, PANEL_WIDTH};
@@ -197,6 +197,16 @@ pub fn gaze_point(angles: GazeAngles, max_gaze_deg: f32) -> Vec2 {
     Vec2::new(along(angles.yaw_deg), along(angles.pitch_deg)).clamped_to_unit_disc()
 }
 
+/// Angular size of a gaze shift between two pupil positions: the inverse of [`gaze_point`] per axis, then
+/// the length of the change in (yaw, pitch).
+pub fn gaze_shift_deg(from: Vec2, to: Vec2, max_gaze_deg: f32) -> f32 {
+    let edge = sinf(max_gaze_deg.to_radians());
+    let angle = |offset: f32| asinf((offset * edge).clamp(-1.0, 1.0)).to_degrees();
+    let yaw = angle(to.x) - angle(from.x);
+    let pitch = angle(to.y) - angle(from.y);
+    sqrtf(yaw * yaw + pitch * pitch)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,6 +378,20 @@ mod tests {
                         close(yaw, want_yaw) && close(pitch, want_pitch)
                     });
             assert!(matches, "{}: got {:?}", case.name, got);
+        }
+    }
+
+    #[test]
+    fn gaze_shift_inverts_gaze_point() {
+        let cases = [
+            ((0.0, 0.0), (20.0, 0.0), 20.0),
+            ((-10.0, 0.0), (10.0, 0.0), 20.0),
+            ((0.0, 0.0), (30.0, 40.0), 50.0),
+        ];
+        for ((from_yaw, from_pitch), (to_yaw, to_pitch), want) in cases {
+            let point = |yaw_deg, pitch_deg| gaze_point(GazeAngles { yaw_deg, pitch_deg }, 55.0);
+            let got = gaze_shift_deg(point(from_yaw, from_pitch), point(to_yaw, to_pitch), 55.0);
+            assert!(close(got, want), "{got} vs {want}");
         }
     }
 

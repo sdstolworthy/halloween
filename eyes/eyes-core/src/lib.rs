@@ -6,6 +6,7 @@
 
 extern crate alloc;
 
+pub mod blink;
 pub mod config;
 pub mod eyes;
 pub mod geometry;
