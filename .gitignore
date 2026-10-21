@@ -1,2 +1,5 @@
 secrets.yaml
 .esphome/
+__pycache__/
+witch-projector/*.egg-info/
+witch-projector/build/

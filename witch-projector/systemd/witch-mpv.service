@@ -1,0 +1,32 @@
+[Unit]
+Description=Witch projector video player (mpv, idle black screen)
+After=systemd-user-sessions.service sound.target
+
+[Service]
+User=witch
+Group=witch
+SupplementaryGroups=video render audio
+RuntimeDirectory=witch
+RuntimeDirectoryMode=0750
+# No desktop session: mpv renders straight to the HDMI output through DRM/KMS. The idle window background is
+# black by default, and --osc=no keeps mpv's logo off the idle screen. Change --audio-device to move the sound
+# off HDMI (list choices with `mpv --audio-device=help`).
+ExecStart=/usr/bin/mpv \
+    --idle=yes \
+    --force-window=yes \
+    --fullscreen \
+    --keep-open=no \
+    --osc=no \
+    --osd-level=0 \
+    --cursor-autohide=always \
+    --input-default-bindings=no \
+    --vo=gpu \
+    --gpu-context=drm \
+    --hwdec=auto-safe \
+    --audio-device=alsa/default:CARD=vc4hdmi0 \
+    --input-ipc-server=/run/witch/mpv.sock
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

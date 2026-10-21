@@ -1,0 +1,15 @@
+[Unit]
+Description=Witch projector MQTT bridge
+Wants=network-online.target
+After=network-online.target witch-mpv.service
+
+[Service]
+User=witch
+Group=witch
+EnvironmentFile=/etc/witch/bridge.env
+ExecStart=/opt/witch/venv/bin/python -m witch_bridge
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
