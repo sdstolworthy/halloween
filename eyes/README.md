@@ -135,7 +135,9 @@ Blinks ride the eye movements: when idle, each glance of 10° or more carries a 
 after the eyes start moving and reopens just before they land (smaller glances don't blink, and the eyes
 never go 6 s without one). While tracking, routine blinks wait until the gaze is still, and the startled
 blink on noticing someone rides the move towards them. The emulator's **Speed** control (down to 0.1×)
-slows the simulation so you can watch this.
+slows the simulation so you can watch this. At 1× the emulator only runs in real time above 10 fps: longer gaps
+between browser frames are capped at 100 ms of simulated time so a background tab doesn't jump, so a
+very slow browser runs the eyes slower than real time.
 
 Readings are debounced: the eyes notice someone after two consecutive in-range readings and let go after
 half a second of `none` (or the stale timeout with no readings at all). The broker accounts for `porch-sensor` and the eyes are created in the homeassistant repo.

@@ -105,7 +105,9 @@ go idle, so a later visitor never inherits it.
     `max_gaze_deg` so a narrow gaze range still blinks) is a saccade with a coupled blink. Gaze-evoked
     blinks become likely for head-fixed saccades of roughly 10° and up; smaller corrective glances don't
     blink. There are no free-running idle blinks. If 6 s pass without one (`MAX_DWELL_MS`), the next
-    glance is forced to the other side (≥ 0.45 of the disc), which always carries a blink.
+    glance is forced to the other side (≥ 0.45 of the disc), which always carries a blink. A forced
+    glance waits for the previous one to settle, so its blink timing starts from rest, but by at most
+    0.8 s (`FORCED_SACCADE_MAX_WAIT_MS`); the longest gap between idle blinks is therefore 6.8 s.
   - **Coupled timeline**, derived from the spring rather than fixed milliseconds. Released from rest, a
     critically damped spring has covered `p(t) = 1 − (1 + ωt)e^(−ωt)` of its move, and the lid events sit
     at fixed points on that curve (`eyes-core/src/blink.rs`):
@@ -117,18 +119,34 @@ go idle, so a later visitor never inherits it.
     | fully open | 88% | 3.66 | 610 → 548 ms (clamped) | 261 ms |
     | gaze settled | 95% | 4.74 | 790 ms | 339 ms |
 
+    The table is the reference for a spring released from rest. In practice each coupled blink is
+    scheduled from the springs' **actual** state (position and velocity) by following a copy of each eye's
+    spring forward with the same closed-form step, so a move that begins while the eye is still travelling
+    gets correspondingly earlier lid events; the earlier eye sets each point.
+
     The whole blink is clamped to **150–450 ms**, since human blinks run ~100–400 ms and gaze-evoked ones
-    longer, with its start kept fixed. The lazy idle spring therefore reopens a little early: at 84% of
+    longer, with its start kept fixed. The clamp never pushes the reopening past the moment the gaze
+    lands (95%). The lazy idle spring therefore reopens a little early: at 84% of
     the move, still before it settles. A very stiff spring would get a blink that slightly outlasts the
     move rather than a twitch. Retuning ω moves every point with it; a test checks the timeline halves
     when ω doubles.
-  - **Tracking:** routine blinks every 2–5 s (15% doubles), each 240 ms (close 70, hold 50, open 120),
+  - **Tracking:** routine blinks every 2–5 s (15% doubles, which only ever follow a routine blink, never a
+    coupled one, because the gaze may still be finishing its move), each 240 ms (close 70, hold 50, open 120),
     but never while the gaze is moving. The gaze counts as moving while either eye's spring is faster than
     0.2 disc/s or further than 0.04 from its target (sensor jitter at walking distance stays well under
     both). A due blink waits until the gaze settles.
   - **Acquisition:** the startled blink on noticing a visitor uses the same coupled timeline on the
     tracking spring (closes after the eyes start towards the visitor, reopens before they land), still at
-    most once per 3 s.
+    most once per 3 s. If an idle saccade's blink is already under way, it is **retimed** onto the
+    acquisition's timeline instead (whatever the rate limit), so it cannot still be shut after the faster
+    tracking gaze lands. The retimed blink continues from the lid's current position, with no visible
+    jump: a closing lid keeps closing to shut at the acquisition's shut point, a shut lid stays shut until
+    then, and a reopening lid just finishes sooner. It never ends later than either the original or the
+    acquisition blink would. In a 2,540-acquisition simulation (20 seeds), lids still not fully open when
+    the tracking gaze reached 95% fell from 216 (8.5%; median 120 ms, worst 230 ms late) to 1 (10 ms, on
+    a negligible move).
+  - **Accepted trade-off:** slow following of a gently moving target counts as settled under the
+    "moving" thresholds, so a routine blink can happen during slow pursuit.
 - **Pupils** dilate as the visitor approaches (0 at max range, 1 at 0.3 m; idle 0.35), with a 0.35 s lag.
 - **Suspicion**: inside 1 m the lids narrow (up to 40% closed at 0.4 m) and tilt into a frown.
 - Frame times are clamped to 250 ms so a stall resumes timers instead of skipping them; a clock that steps
@@ -293,8 +311,9 @@ never pairs a cached `main.js` with a new wasm. No compiled wasm is committed.
 - `eyes-hal`: the frame loop with mocks (routing, bad payloads, merge-over-defaults, rejection, clearing,
   brightness writes, flood limiting, staleness), the mailbox (config survives a full queue, latest-wins,
   drop-oldest) and the buffer ladder.
-- `eyes-web`: ABI-level behaviour, porch-sensor payload formatting, the panel-gamma table, and the pinned
-  scripted-run hash; `smoke.mjs` checks the wasm against it.
+- `eyes-web`: ABI-level behaviour, porch-sensor payload formatting, the panel-gamma table, and two pinned
+  scripted-run hashes: a frame mid-way through the coupled acquisition blink (297 ms, pinning blink
+  timing) and a settled one; `smoke.mjs` checks the wasm against both.
 - `eyes-emulator`: the walk-up script, contact-sheet layout, and the PNG writer.
 - Firmware: `cargo +esp build --release` must succeed. Not runnable here; bench acceptance below.
 
