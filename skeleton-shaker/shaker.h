@@ -38,11 +38,13 @@ inline float degrees_to_level(uint32_t degrees) {
   return (float(degrees) - 90.0f) / 90.0f;
 }
 
+// Each move slams exactly to one end of the sweep, alternating sides: full deflection on every
+// stroke. Only the dwell is randomized (and a fixed dwell range makes it a metronome).
 template <typename RandomFn>
-Move plan_move(Range degrees, Range dwell_ms, RandomFn next_random) {
-  // Braced initialization guarantees left-to-right evaluation, so the random draws are in a fixed order.
+Move plan_move(Range degrees, Range dwell_ms, bool go_high, RandomFn next_random) {
+  if (degrees.lo > degrees.hi) std::swap(degrees.lo, degrees.hi);
   return Move{
-      degrees_to_level(pick_in_range(degrees, next_random())),
+      degrees_to_level(go_high ? degrees.hi : degrees.lo),
       pick_in_range(dwell_ms, next_random()),
   };
 }

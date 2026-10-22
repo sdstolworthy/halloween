@@ -65,19 +65,28 @@ static void test_degrees_to_level() {
 static void test_plan_move() {
   struct Case {
     const char *name;
+    bool go_high;
     std::vector<uint32_t> randoms;  // angle, dwell
     float want_level;
     uint32_t want_dwell_ms;
   };
+  // The angle is deterministic (the sweep end for the chosen side); the one draw picks the dwell.
   const Case cases[] = {
-      {"zero draws give the low angle and shortest dwell", {0, 0}, -50.0f / 90, 80},
-      {"top draws give the high angle and longest dwell", {100, 220}, 50.0f / 90, 300},
+      {"low side slams to the low end, zero draw gives shortest dwell", false, {0}, -50.0f / 90, 80},
+      {"high side slams to the high end, top draw gives longest dwell", true, {220}, 50.0f / 90, 300},
+      {"fixed dwell range is a metronome", true, {12345}, 50.0f / 90, 120},
   };
   for (const auto &c : cases) {
     size_t next = 0;
-    auto move = shaker::plan_move({40, 140}, {80, 300}, [&] { return c.randoms[next++]; });
+    const shaker::Range dwell = c.want_dwell_ms == 120 ? shaker::Range{120, 120} : shaker::Range{80, 300};
+    auto move = shaker::plan_move({40, 140}, dwell, c.go_high, [&] { return c.randoms[next++]; });
     check(std::fabs(move.level - c.want_level) < 1e-6f && move.dwell_ms == c.want_dwell_ms, c.name);
   }
+  // Crossed sweep bounds still slam to the true ends.
+  size_t next = 0;
+  std::vector<uint32_t> randoms = {0};
+  auto move = shaker::plan_move({140, 40}, {80, 300}, false, [&] { return randoms[next++]; });
+  check(std::fabs(move.level - (-50.0f / 90)) < 1e-6f, "crossed bounds are swapped");
 }
 
 int main() {

@@ -1,10 +1,13 @@
 substitutions:
   servo_pin: GPIO25
-  # Horn travel and how long it holds each pose; 40-140 deg on the stock ~20 mm horn is ~30 mm of stroke.
-  sweep_min_deg: "40"
-  sweep_max_deg: "140"
-  dwell_min_ms: "80"
-  dwell_max_ms: "300"
+  # Every move slams to a sweep end, alternating ends (see shaker::plan_move): full deflection each
+  # stroke. The dwell is how long a stroke gets before the reversal; the MG90S needs ~330 ms for the
+  # full 180 under load, so a shorter dwell reverses mid-travel and shrinks the arc instead of speeding
+  # it up. If the servo buzzes/grinds at the ends, back the sweep off to 5-175.
+  sweep_min_deg: "0"
+  sweep_max_deg: "180"
+  dwell_min_ms: "700"
+  dwell_max_ms: "700"
 
 esphome:
   name: skeleton-shaker
@@ -173,8 +176,10 @@ script:
             lambda: return !shaker::elapsed(millis(), id(dance_started_at), uint32_t(id(dance_length_s).state * 1000));
           then:
             - lambda: |-
+                static bool go_high;
+                go_high = !go_high;
                 auto move = shaker::plan_move({${sweep_min_deg}, ${sweep_max_deg}}, {${dwell_min_ms}, ${dwell_max_ms}},
-                                              [] { return random_uint32(); });
+                                              go_high, [] { return random_uint32(); });
                 id(shaker_servo).write(move.level);
                 id(dwell_ms) = move.dwell_ms;
                 ESP_LOGD("shaker", "Move to level %.2f, dwell %" PRIu32 " ms", move.level, move.dwell_ms);
