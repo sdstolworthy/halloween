@@ -1,13 +1,16 @@
 # Witch projector
 
-Raspberry Pi + projector aimed at the front door. mpv holds a black screen and plays the witch video when Home
-Assistant presses **Play witch**. Design: [porch show spec](../docs/specs/2026-10-20-porch-show-design.md).
+Raspberry Pi + projector aimed at the front door. mpv holds a black screen and plays a scare video when Home
+Assistant presses **Random scare** or one of the per-video buttons. Design: [porch show spec](../docs/specs/2026-10-20-porch-show-design.md).
 
 - `witch-mpv.service` runs mpv fullscreen on the HDMI output (DRM/KMS, no desktop), idle black, JSON IPC at
   `/run/witch/mpv.sock`. At end of file mpv goes back to idle black.
 - `witch-bridge.service` runs `witch_bridge`, which connects to Mosquitto and publishes HA MQTT discovery for a
   **Witch projector** device:
-  - **Play witch** button — plays `/opt/witch/witch.mp4` from the start (restarts it if already playing).
+  - **Random scare** button — plays one of the videos at random, never the same one twice in a row. The porch
+    scare automation presses this one (entity `button.witch_projector_play_witch`, kept from when it was "Play witch").
+  - **Play \<name\>** button per video (Play witch1, Play witch2, Play witch3, Play ghost) — plays
+    `/opt/witch/videos/<name>.mp4` from the start (restarts it if something is already playing).
   - **Stop** button — back to black.
   - **Playing** binary sensor — from mpv's `idle-active` property, not assumed.
   - Availability `witch_projector/availability`: `online` only while the bridge is connected to both MQTT and mpv;
@@ -17,18 +20,23 @@ The bridge reconnects to MQTT and to the mpv socket on its own; systemd restarts
 
 ## Install (on the Pi)
 
-Raspberry Pi 4 or 5, Raspberry Pi OS Lite (Bookworm), projector on HDMI 0.
+Raspberry Pi 4 or 5, Raspberry Pi OS (Bookworm or Trixie), projector on HDMI 0 (the micro-HDMI port next to
+USB-C power). On a desktop image the playbook stops the desktop and makes the Pi boot to the console, because the
+desktop holds the HDMI output and mpv can't draw; `sudo systemctl set-default graphical.target` undoes that.
 
 ```sh
 git clone <halloween repo> && cd halloween
-scp workstation:witch.mp4 ~/witch.mp4        # the video is not in git
-./witch-projector/install.sh ~/witch.mp4     # installs ansible-core if needed, then runs the playbook
+scp workstation:{witch1,witch2,witch3,ghost}.mp4 ~/   # videos are not in git
+./witch-projector/install.sh ~               # installs ansible-core if needed, then runs the playbook
 journalctl -fu witch-bridge -u witch-mpv
 ```
 
 `install.sh` runs `ansible/playbook.yml` against the Pi itself. It is safe to rerun, and rerunning is how changes
-are deployed: `git pull && ./witch-projector/install.sh ~/witch.mp4`. Without a video it still sets everything
-up, leaves the screen black, and says so at the end.
+are deployed: `git pull && ./witch-projector/install.sh`. The videos are the names in `witch_videos` in
+`ansible/group_vars/all/vars.yml`, each read from `<folder>/<name>.mp4` (folder defaults to your home directory).
+To add or drop one, edit that list and rerun. Missing files are skipped with a warning at the end, and videos no
+longer listed are removed from the Pi. Home Assistant keeps a dropped video's button as unavailable until you
+delete it there.
 
 The playbook writes `/etc/witch/bridge.env` from `ansible/templates/bridge.env.j2`, so edit
 `ansible/group_vars/all/vars.yml` rather than the file on the Pi. The MQTT password is in
@@ -44,7 +52,7 @@ Audio goes to HDMI 0 by default (`--audio-device` in `systemd/witch-mpv.service`
 
 | Topic | Direction | Payload |
 | --- | --- | --- |
-| `witch_projector/command` | HA → bridge | `play`, `stop` |
+| `witch_projector/command` | HA → bridge | `play` (random), `play:<name>`, `stop` |
 | `witch_projector/playing` | bridge → HA (retained) | `ON`, `OFF` |
 | `witch_projector/availability` | bridge → HA (retained, last will) | `online`, `offline` |
 | `homeassistant/<component>/witch_projector/<object>/config` | bridge → HA (retained) | discovery |

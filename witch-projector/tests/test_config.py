@@ -13,9 +13,14 @@ from witch_bridge.config import Config, ConfigError
         ),
         ({"MQTT_HOST": "broker", "MQTT_PORT": "", "MQTT_USERNAME": ""}, Config(mqtt_host="broker")),
         (
-            {"MQTT_HOST": "broker", "MPV_SOCKET": "/tmp/s", "WITCH_VIDEO": "/v.mp4", "DISCOVERY_PREFIX": "ha"},
-            Config(mqtt_host="broker", mpv_socket="/tmp/s", video_path="/v.mp4", discovery_prefix="ha"),
+            {"MQTT_HOST": "broker", "MPV_SOCKET": "/tmp/s", "WITCH_VIDEOS_DIR": "/v", "DISCOVERY_PREFIX": "ha"},
+            Config(mqtt_host="broker", mpv_socket="/tmp/s", videos_dir="/v", discovery_prefix="ha"),
         ),
+        (
+            {"MQTT_HOST": "broker", "WITCH_VIDEOS": "witch1, witch2,ghost"},
+            Config(mqtt_host="broker", videos=("witch1", "witch2", "ghost")),
+        ),
+        ({"MQTT_HOST": "broker", "WITCH_VIDEOS": ""}, Config(mqtt_host="broker")),
     ],
 )
 def test_from_env(env, expected):
@@ -28,8 +33,17 @@ def test_from_env(env, expected):
         {},
         {"MQTT_HOST": ""},
         {"MQTT_HOST": "broker", "MQTT_PORT": "mqtt"},
+        {"MQTT_HOST": "broker", "WITCH_VIDEOS": "witch 1"},
+        {"MQTT_HOST": "broker", "WITCH_VIDEOS": "witch/1"},
+        {"MQTT_HOST": "broker", "WITCH_VIDEOS": "witch1,,ghost"},
+        {"MQTT_HOST": "broker", "WITCH_VIDEOS": "ghost,ghost"},
     ],
 )
 def test_from_env_rejects_invalid(env):
     with pytest.raises(ConfigError):
         Config.from_env(env)
+
+
+def test_video_paths_live_in_the_videos_dir():
+    config = Config(mqtt_host="broker", videos_dir="/opt/v", videos=("witch1", "ghost"))
+    assert config.video_paths() == {"witch1": "/opt/v/witch1.mp4", "ghost": "/opt/v/ghost.mp4"}

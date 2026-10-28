@@ -6,6 +6,7 @@ import functools
 import logging
 import os
 import queue
+import random
 import threading
 import time
 from typing import Any, Callable, Mapping
@@ -43,7 +44,7 @@ def main(env: Mapping[str, str]) -> None:
         on_disconnected=post("mpv_disconnected"),
         sleep=time.sleep,
     )
-    bridge = Bridge(mqtt, mpv, topics, config.video_path)
+    bridge = Bridge(mqtt, mpv, topics, config.video_paths(), random.choice)
 
     threading.Thread(target=mpv.run, args=(lambda: True,), name="mpv-ipc", daemon=True).start()
     mqtt.start(config.mqtt_host, config.mqtt_port, config.mqtt_username, config.mqtt_password)

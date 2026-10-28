@@ -28,6 +28,7 @@
       loop:
         - { path: "{{ witch_home }}", group: root, mode: "0755" }
         - { path: "{{ witch_home }}/src", group: root, mode: "0755" }
+        - { path: "{{ witch_videos_dir }}", group: root, mode: "0755" }
         - { path: /etc/witch, group: witch, mode: "0750" }
 
     - name: Copy the bridge source
@@ -51,6 +52,47 @@
       when: bridge_source is changed or venv is changed
       notify: Restart witch-bridge
 
+    - name: Look for the videos
+      ansible.builtin.stat:
+        path: "{{ witch_video_src_dir }}/{{ item }}.mp4"
+      loop: "{{ witch_videos }}"
+      register: video_sources
+
+    - name: Copy the videos
+      ansible.builtin.copy:
+        src: "{{ item.stat.path }}"
+        dest: "{{ witch_videos_dir }}/{{ item.item }}.mp4"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ video_sources.results | selectattr('stat.exists') }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Note which videos are installed
+      ansible.builtin.set_fact:
+        installed_videos: "{{ video_sources.results | selectattr('stat.exists') | map(attribute='item') }}"
+        missing_videos: "{{ video_sources.results | rejectattr('stat.exists') | map(attribute='item') }}"
+
+    - name: Find videos that are no longer listed
+      ansible.builtin.find:
+        paths: "{{ witch_videos_dir }}"
+        patterns: "*.mp4"
+      register: video_files
+
+    - name: Remove unlisted videos
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ video_files.files | map(attribute='path') }}"
+      when: (item | basename | splitext | first) not in installed_videos
+
+    - name: Remove the single video from before there was a list
+      ansible.builtin.file:
+        path: "{{ witch_home }}/witch.mp4"
+        state: absent
+
     - name: Write the bridge environment file
       ansible.builtin.template:
         src: bridge.env.j2
@@ -61,20 +103,50 @@
       no_log: true
       notify: Restart witch-bridge
 
-    - name: Look for the witch video
-      ansible.builtin.stat:
-        path: "{{ witch_video_src }}"
-      register: video
+    # Changing the boot target must not lock us out: an sshd that was only started by hand (or by the desktop)
+    # would not come back after a reboot to the console.
+    - name: Check whether SSH is running
+      ansible.builtin.systemd:
+        name: ssh.service
+      register: ssh_service
+      failed_when: false
+      tags: [systemd]
 
-    - name: Copy the witch video
-      ansible.builtin.copy:
-        src: "{{ witch_video_src }}"
-        dest: "{{ witch_home }}/witch.mp4"
-        remote_src: true
-        owner: root
-        group: root
-        mode: "0644"
-      when: video.stat.exists
+    - name: Keep SSH enabled across reboots
+      ansible.builtin.systemd:
+        name: ssh.service
+        enabled: true
+      when: ssh_service.status.ActiveState | default('') == 'active'
+      tags: [systemd]
+
+    # A desktop session's compositor holds DRM master on the HDMI output, so mpv can't draw. Desktop images boot
+    # to the console instead; `systemctl set-default graphical.target` brings the desktop back.
+    - name: Read the default boot target
+      ansible.builtin.command: systemctl get-default
+      register: boot_target
+      changed_when: false
+      tags: [systemd]
+
+    - name: Boot to the console instead of the desktop
+      ansible.builtin.command: systemctl set-default multi-user.target
+      when: boot_target.stdout != 'multi-user.target'
+      changed_when: true
+      tags: [systemd]
+
+    - name: Check for a running display manager
+      ansible.builtin.systemd:
+        name: display-manager.service
+      register: display_manager
+      failed_when: false
+      tags: [systemd]
+
+    - name: Stop the display manager
+      ansible.builtin.systemd:
+        name: display-manager.service
+        state: stopped
+      when: display_manager.status.ActiveState | default('') == 'active'
+      notify: Restart witch-mpv
+      tags: [systemd]
 
     - name: Install the mpv unit
       ansible.builtin.copy:
@@ -128,12 +200,12 @@
       loop: [witch-mpv, witch-bridge]
       tags: [systemd]
 
-    - name: Warn about the missing video
+    - name: Warn about missing videos
       ansible.builtin.debug:
         msg: >-
-          No video at {{ witch_video_src }}. Everything else is set up and the screen idles black;
-          rerun install.sh with the video's path to add it.
-      when: not video.stat.exists
+          No {{ missing_videos | map('regex_replace', '$', '.mp4') | join(', ') }} in {{ witch_video_src_dir }};
+          those buttons are left out. Copy them there and rerun install.sh to add them.
+      when: missing_videos | length > 0
 
   handlers:
     - name: Restart witch-mpv

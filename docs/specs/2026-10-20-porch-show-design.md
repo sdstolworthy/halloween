@@ -20,7 +20,7 @@ SparkFun HC-SR04 (3.3 V) ── ESP32 "porch-sensor" (ESPHome) ──API──�
                                                  HA automation "Porch scare"
                                                    ├─ ESPHome → skeleton-shaker: Dance button
                                                    ├─ WLED → preset "Scare", later "Idle"
-                                                   └─ MQTT → witch-projector (Pi): Play witch button
+                                                   └─ MQTT → witch-projector (Pi): Random scare button
 ```
 
 | Unit | Repo / path | Responsibility |
@@ -94,14 +94,17 @@ can later be merged into another device (shaker or eyes) with a one-line include
   verified against the installed mpv version), JSON IPC socket at `/run/witch/mpv.sock`.
   Idle shows black; at end of file mpv returns to idle black.
 - Audio: HDMI to the projector by default (one mpv option to change).
-- Video at `/opt/witch/witch.mp4` (supplied by the user, not in git).
+- Videos at `/opt/witch/videos/<name>.mp4` (supplied by the user, not in git; names listed in the playbook vars).
+  *Revised 2026-10-27: originally one `witch.mp4`.*
 
 ### witch-bridge (Python)
 
 - Connects to the existing Mosquitto broker (`homeassistant/apps/mosquitto`); broker host, port and credentials
   from an environment file (`/etc/witch/bridge.env`), never from the repo.
 - Publishes HA MQTT discovery for one device, "Witch projector", with:
-  - **Play witch** — button; loads the video from the start (restarts if already playing).
+  - **Random scare** (object id `play_witch`, originally "Play witch") — button; plays a random video, never the
+    previous one twice in a row.
+  - **Play \<name\>** — one button per video; loads it from the start (restarts if already playing).
   - **Stop** — button; stops playback, back to black.
   - **Playing** — binary sensor; driven by mpv's idle/playback events, not by assumption.
   - Availability topic with an MQTT last-will, so HA shows the device unavailable if the bridge dies.

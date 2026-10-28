@@ -6,6 +6,9 @@ mqtt_password: "{{ vault_mqtt_password }}"
 
 witch_home: /opt/witch
 witch_source: "{{ playbook_dir }}/.."
-# install.sh sets WITCH_VIDEO_SRC from its argument; passing it through the environment avoids -e quoting problems
-# with paths that contain spaces.
-witch_video_src: "{{ lookup('ansible.builtin.env', 'WITCH_VIDEO_SRC') }}"
+witch_videos_dir: "{{ witch_home }}/videos"
+# Each name becomes a "Play <name>" button in Home Assistant, played from <name>.mp4. Random scare picks among them.
+witch_videos: [witch1, witch2, witch3, ghost]
+# install.sh sets WITCH_VIDEO_SRC_DIR from its argument; passing it through the environment avoids -e quoting
+# problems with paths that contain spaces.
+witch_video_src_dir: "{{ lookup('ansible.builtin.env', 'WITCH_VIDEO_SRC_DIR') }}"

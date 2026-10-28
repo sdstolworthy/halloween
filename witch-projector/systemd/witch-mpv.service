@@ -8,6 +8,9 @@ Group=witch
 SupplementaryGroups=video render audio
 RuntimeDirectory=witch
 RuntimeDirectoryMode=0750
+# The witch user's home is not writable, so give mpv somewhere to keep its GPU shader cache.
+CacheDirectory=witch
+Environment=XDG_CACHE_HOME=/var/cache/witch
 # No desktop session: mpv renders straight to the HDMI output through DRM/KMS. The idle window background is
 # black by default, and --osc=no keeps mpv's logo off the idle screen. Change --audio-device to move the sound
 # off HDMI (list choices with `mpv --audio-device=help`).
@@ -16,6 +19,7 @@ ExecStart=/usr/bin/mpv \
     --force-window=yes \
     --fullscreen \
     --keep-open=no \
+    --quiet \
     --osc=no \
     --osd-level=0 \
     --cursor-autohide=always \

@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Callable, Mapping, Protocol, Sequence
 
 log = logging.getLogger(__name__)
 
 PLAY = "play"
+PLAY_VIDEO_PREFIX = "play:"
 STOP = "stop"
 ONLINE = "online"
 OFFLINE = "offline"
@@ -42,11 +43,17 @@ class Topics:
         return f"{self.node_id}/playing"
 
 
-def discovery_messages(topics: Topics) -> list[tuple[str, str]]:
+def discovery_messages(topics: Topics, video_names: Sequence[str]) -> list[tuple[str, str]]:
     device = {"identifiers": [topics.node_id], "name": "Witch projector", "model": "Raspberry Pi + mpv"}
+    # play_witch keeps its original object id so the porch scare automation's entity survives the rename.
     entities = [
-        ("button", "play_witch", {"name": "Play witch", "command_topic": topics.command, "payload_press": PLAY,
-                                  "icon": "mdi:play"}),
+        ("button", "play_witch", {"name": "Random scare", "command_topic": topics.command, "payload_press": PLAY,
+                                  "icon": "mdi:shuffle-variant"}),
+        *(
+            ("button", f"video_{name}", {"name": f"Play {name}", "command_topic": topics.command,
+                                         "payload_press": f"{PLAY_VIDEO_PREFIX}{name}", "icon": "mdi:play"})
+            for name in video_names
+        ),
         ("button", "stop", {"name": "Stop", "command_topic": topics.command, "payload_press": STOP,
                             "icon": "mdi:stop"}),
         ("binary_sensor", "playing", {"name": "Playing", "state_topic": topics.playing, "device_class": "running"}),
@@ -68,16 +75,25 @@ def discovery_messages(topics: Topics) -> list[tuple[str, str]]:
 class Bridge:
     """Single-threaded core: every method is called from one event loop, so no locking is needed here."""
 
-    def __init__(self, mqtt: Publisher, mpv: Player, topics: Topics, video_path: str) -> None:
+    def __init__(
+        self,
+        mqtt: Publisher,
+        mpv: Player,
+        topics: Topics,
+        videos: Mapping[str, str],
+        choose: Callable[[Sequence[str]], str],
+    ) -> None:
         self._mqtt = mqtt
         self._mpv = mpv
         self._topics = topics
-        self._video_path = video_path
+        self._videos = dict(videos)
+        self._choose = choose
+        self._last_video: str | None = None
         self._mpv_connected = False
         self._playing: bool | None = None
 
     def mqtt_connected(self) -> None:
-        for topic, payload in discovery_messages(self._topics):
+        for topic, payload in discovery_messages(self._topics, list(self._videos)):
             self._mqtt.publish(topic, payload, retain=True)
         self._publish_availability()
         self._publish_playing()
@@ -102,11 +118,30 @@ class Bridge:
 
     def command(self, payload: str) -> None:
         if payload == PLAY:
-            self._mpv.command("loadfile", self._video_path, "replace")
+            self._play_random()
+        elif payload.startswith(PLAY_VIDEO_PREFIX):
+            self._play(payload.removeprefix(PLAY_VIDEO_PREFIX))
         elif payload == STOP:
             self._mpv.command("stop")
         else:
             log.warning("Ignoring unknown command %r", payload)
+
+    def _play_random(self) -> None:
+        # Skipping the last clip means back-to-back scares never repeat, as long as there is more than one.
+        candidates = [name for name in self._videos if name != self._last_video] or list(self._videos)
+        if not candidates:
+            log.warning("Random scare requested but no videos are configured")
+            return
+        self._play(self._choose(candidates))
+
+    def _play(self, name: str) -> None:
+        path = self._videos.get(name)
+        if path is None:
+            log.warning("Ignoring play for unknown video %r", name)
+            return
+        log.info("Playing %s", name)
+        self._last_video = name
+        self._mpv.command("loadfile", path, "replace")
 
     def _publish_availability(self) -> None:
         self._mqtt.publish(self._topics.availability, ONLINE if self._mpv_connected else OFFLINE, retain=True)

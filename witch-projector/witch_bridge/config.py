@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import posixpath
+import re
 from dataclasses import dataclass
 from typing import Mapping
+
+# Video names become MQTT topic segments, Home Assistant object ids and file names.
+VIDEO_NAME = re.compile(r"[A-Za-z0-9_-]+")
 
 
 class ConfigError(ValueError):
@@ -15,7 +20,8 @@ class Config:
     mqtt_username: str | None = None
     mqtt_password: str | None = None
     mpv_socket: str = "/run/witch/mpv.sock"
-    video_path: str = "/opt/witch/witch.mp4"
+    videos_dir: str = "/opt/witch/videos"
+    videos: tuple[str, ...] = ()
     discovery_prefix: str = "homeassistant"
 
     @classmethod
@@ -35,6 +41,22 @@ class Config:
             mqtt_username=value("MQTT_USERNAME"),
             mqtt_password=value("MQTT_PASSWORD"),
             mpv_socket=value("MPV_SOCKET") or cls.mpv_socket,
-            video_path=value("WITCH_VIDEO") or cls.video_path,
+            videos_dir=value("WITCH_VIDEOS_DIR") or cls.videos_dir,
+            videos=parse_videos(value("WITCH_VIDEOS") or ""),
             discovery_prefix=value("DISCOVERY_PREFIX") or cls.discovery_prefix,
         )
+
+    def video_paths(self) -> dict[str, str]:
+        return {name: posixpath.join(self.videos_dir, f"{name}.mp4") for name in self.videos}
+
+
+def parse_videos(raw: str) -> tuple[str, ...]:
+    if not raw.strip():
+        return ()
+    names = tuple(name.strip() for name in raw.split(","))
+    for name in names:
+        if not VIDEO_NAME.fullmatch(name):
+            raise ConfigError(f"WITCH_VIDEOS names may only use letters, digits, _ and -, got {name!r}")
+    if len(set(names)) != len(names):
+        raise ConfigError(f"WITCH_VIDEOS has a duplicate name: {raw!r}")
+    return names

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Run on the Pi from a checkout of the halloween repo: ./witch-projector/install.sh [path/to/witch.mp4]
+# Run on the Pi from a checkout of the halloween repo: ./witch-projector/install.sh [video-folder]
+# The folder (default: your home directory) holds the <name>.mp4 files listed in ansible/group_vars/all/vars.yml.
 set -euo pipefail
 
-export WITCH_VIDEO_SRC
-WITCH_VIDEO_SRC="$(realpath -m "${1:-$HOME/witch.mp4}")"
+export WITCH_VIDEO_SRC_DIR
+WITCH_VIDEO_SRC_DIR="$(realpath -m "${1:-$HOME}")"
 vault_pass_file="$HOME/.config/halloween/vault-pass"
 
 as_root() { if [[ $EUID -eq 0 ]]; then "$@"; else sudo "$@"; fi; }
