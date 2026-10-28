@@ -27,7 +27,7 @@ SparkFun HC-SR04 (3.3 V) ── ESP32 "porch-sensor" (ESPHome) ──API──�
 | --- | --- | --- |
 | porch-sensor | `halloween/porch-sensor/` | Measure distance; publish Distance and Visitor to HA. |
 | skeleton-shaker | `halloween/skeleton-shaker/` | Dance on request. No local trigger. |
-| witch-projector | `halloween/witch-projector/` | Hold a black screen; play the video on request; report Playing. |
+| witch-projector | `halloween/witch-projector/` | Loop an idle video; play a scare on request; report Playing. |
 | Porch scare automation | `homeassistant/apps/homeassistant/config/automations.yaml` | Fire the effects, restore lights, cool down. |
 | WLED controller | existing | User creates presets named `Scare` and `Idle` in the WLED UI. |
 
@@ -92,7 +92,8 @@ can later be merged into another device (shaker or eyes) with a one-line include
 - **mpv** as a long-running systemd service, fullscreen, no desktop session:
   `--idle --force-window --fullscreen --keep-open=no` (the window background defaults to black; exact flags
   verified against the installed mpv version), JSON IPC socket at `/run/witch/mpv.sock`.
-  Idle shows black; at end of file mpv returns to idle black.
+  Idle shows black; at end of file mpv returns to idle black. *Revised 2026-10-27: the bridge loops `happy.mp4`
+  whenever mpv is idle, so the door shows the happy loop between scares.*
 - Audio: HDMI to the projector by default (one mpv option to change).
 - Videos at `/opt/witch/videos/<name>.mp4` (supplied by the user, not in git; names listed in the playbook vars).
   *Revised 2026-10-27: originally one `witch.mp4`.*
@@ -105,8 +106,8 @@ can later be merged into another device (shaker or eyes) with a one-line include
   - **Random scare** (object id `play_witch`, originally "Play witch") — button; plays a random video, never the
     previous one twice in a row.
   - **Play \<name\>** — one button per video; loads it from the start (restarts if already playing).
-  - **Stop** — button; stops playback, back to black.
-  - **Playing** — binary sensor; driven by mpv's idle/playback events, not by assumption.
+  - **Stop** — button; stops the scare, back to the happy loop.
+  - **Playing** — binary sensor; on while a scare video is on screen (mpv's `path`), off during the happy loop.
   - Availability topic with an MQTT last-will, so HA shows the device unavailable if the bridge dies.
 - Structure: the MQTT client and the mpv IPC connection are injected behind small interfaces; the core maps
   commands → mpv requests and mpv events → state publishes. Unit tests use fakes for both (no network, no

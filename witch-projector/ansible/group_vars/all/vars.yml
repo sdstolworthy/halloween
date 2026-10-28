@@ -9,6 +9,8 @@ witch_source: "{{ playbook_dir }}/.."
 witch_videos_dir: "{{ witch_home }}/videos"
 # Each name becomes a "Play <name>" button in Home Assistant, played from <name>.mp4. Random scare picks among them.
 witch_videos: [witch1, witch2, witch3, ghost]
+# Loops whenever no scare is playing (at boot, after a scare ends, after Stop). It gets no button.
+witch_idle_video: happy
 # install.sh sets WITCH_VIDEO_SRC_DIR from its argument; passing it through the environment avoids -e quoting
 # problems with paths that contain spaces.
 witch_video_src_dir: "{{ lookup('ansible.builtin.env', 'WITCH_VIDEO_SRC_DIR') }}"

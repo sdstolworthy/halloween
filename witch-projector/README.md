@@ -1,18 +1,21 @@
 # Witch projector
 
-Raspberry Pi + projector aimed at the front door. mpv holds a black screen and plays a scare video when Home
-Assistant presses **Random scare** or one of the per-video buttons. Design: [porch show spec](../docs/specs/2026-10-20-porch-show-design.md).
+Raspberry Pi + projector aimed at the front door. Between scares it loops `happy.mp4`; when Home Assistant
+presses **Random scare** or one of the per-video buttons it cuts to that scare, then goes back to the loop. Design: [porch show spec](../docs/specs/2026-10-20-porch-show-design.md).
 
-- `witch-mpv.service` runs mpv fullscreen on the HDMI output (DRM/KMS, no desktop), idle black, JSON IPC at
-  `/run/witch/mpv.sock`. At end of file mpv goes back to idle black.
+- `witch-mpv.service` runs mpv fullscreen on the HDMI output (DRM/KMS, no desktop), JSON IPC at
+  `/run/witch/mpv.sock`. mpv itself idles black; the bridge loads the happy loop whenever mpv falls idle (at
+  start, after a scare, after Stop). If the happy video fails to load, the bridge stops retrying and the screen
+  stays black between scares until the bridge or mpv restarts.
 - `witch-bridge.service` runs `witch_bridge`, which connects to Mosquitto and publishes HA MQTT discovery for a
   **Witch projector** device:
   - **Random scare** button — plays one of the videos at random, never the same one twice in a row. The porch
     scare automation presses this one (entity `button.witch_projector_play_witch`, kept from when it was "Play witch").
   - **Play \<name\>** button per video (Play witch1, Play witch2, Play witch3, Play ghost) — plays
     `/opt/witch/videos/<name>.mp4` from the start (restarts it if something is already playing).
-  - **Stop** button — back to black.
-  - **Playing** binary sensor — from mpv's `idle-active` property, not assumed.
+  - **Stop** button — ends the scare and returns to the happy loop.
+  - **Playing** binary sensor — on only while a scare video is on screen (from mpv's `path` property), so the
+    happy loop reads as off.
   - Availability `witch_projector/availability`: `online` only while the bridge is connected to both MQTT and mpv;
     a retained last will marks it `offline` if the bridge dies.
 
@@ -32,8 +35,8 @@ journalctl -fu witch-bridge -u witch-mpv
 ```
 
 `install.sh` runs `ansible/playbook.yml` against the Pi itself. It is safe to rerun, and rerunning is how changes
-are deployed: `git pull && ./witch-projector/install.sh`. The videos are the names in `witch_videos` in
-`ansible/group_vars/all/vars.yml`, each read from `<folder>/<name>.mp4` (folder defaults to your home directory).
+are deployed: `git pull && ./witch-projector/install.sh`. The videos are the names in `witch_videos` (scares) and
+`witch_idle_video` (the loop, default `happy`) in `ansible/group_vars/all/vars.yml`, each read from `<folder>/<name>.mp4` (folder defaults to your home directory).
 To add or drop one, edit that list and rerun. Missing files are skipped with a warning at the end, and videos no
 longer listed are removed from the Pi. Home Assistant keeps a dropped video's button as unavailable until you
 delete it there.

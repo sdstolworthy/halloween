@@ -15,6 +15,7 @@ STOP = "stop"
 ONLINE = "online"
 OFFLINE = "offline"
 IDLE_ACTIVE_OBSERVER_ID = 1
+PATH_OBSERVER_ID = 2
 
 
 class Publisher(Protocol):
@@ -82,12 +83,16 @@ class Bridge:
         topics: Topics,
         videos: Mapping[str, str],
         choose: Callable[[Sequence[str]], str],
+        idle_video: str | None = None,
     ) -> None:
         self._mqtt = mqtt
         self._mpv = mpv
         self._topics = topics
         self._videos = dict(videos)
         self._choose = choose
+        self._idle_video = idle_video
+        self._idle_video_broken = False
+        self._loaded: str | None = None
         self._last_video: str | None = None
         self._mpv_connected = False
         self._playing: bool | None = None
@@ -100,8 +105,11 @@ class Bridge:
 
     def mpv_connected(self) -> None:
         self._mpv_connected = True
-        # mpv answers an observe with the current value straight away, so Playing is known without guessing.
+        self._idle_video_broken = False
+        # mpv answers an observe with the current value straight away, so Playing is known without guessing and an
+        # idle mpv starts the happy loop at once.
         self._mpv.command("observe_property", IDLE_ACTIVE_OBSERVER_ID, "idle-active")
+        self._mpv.command("observe_property", PATH_OBSERVER_ID, "path")
         self._publish_availability()
 
     def mpv_disconnected(self) -> None:
@@ -110,9 +118,18 @@ class Bridge:
         self._publish_availability()
 
     def mpv_message(self, message: dict[str, Any]) -> None:
-        if message.get("event") == "property-change" and message.get("name") == "idle-active":
-            self._playing = not message.get("data")
+        event, name = message.get("event"), message.get("name")
+        if event == "property-change" and name == "idle-active":
+            if message.get("data"):
+                self._loop_idle_video()
+        elif event == "property-change" and name == "path":
+            # The happy loop is always on screen between scares, so only a scare video counts as Playing.
+            self._playing = message.get("data") in self._videos.values()
             self._publish_playing()
+        elif event == "end-file":
+            if message.get("reason") == "error" and self._loaded == self._idle_video:
+                log.warning("Idle video %s failed to load; staying black between scares", self._idle_video)
+                self._idle_video_broken = True
         elif message.get("error") not in (None, "success"):
             log.warning("mpv rejected a command: %s", message)
 
@@ -141,7 +158,15 @@ class Bridge:
             return
         log.info("Playing %s", name)
         self._last_video = name
+        self._loaded = path
         self._mpv.command("loadfile", path, "replace")
+
+    def _loop_idle_video(self) -> None:
+        if self._idle_video is None or self._idle_video_broken:
+            return
+        self._loaded = self._idle_video
+        # A per-file option, so the loop ends when a scare replaces it instead of carrying over to the scare.
+        self._mpv.command("loadfile", self._idle_video, "replace", -1, "loop-file=inf")
 
     def _publish_availability(self) -> None:
         self._mqtt.publish(self._topics.availability, ONLINE if self._mpv_connected else OFFLINE, retain=True)

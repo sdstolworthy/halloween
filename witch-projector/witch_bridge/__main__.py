@@ -44,7 +44,7 @@ def main(env: Mapping[str, str]) -> None:
         on_disconnected=post("mpv_disconnected"),
         sleep=time.sleep,
     )
-    bridge = Bridge(mqtt, mpv, topics, config.video_paths(), random.choice)
+    bridge = Bridge(mqtt, mpv, topics, config.video_paths(), random.choice, config.idle_video_path())
 
     threading.Thread(target=mpv.run, args=(lambda: True,), name="mpv-ipc", daemon=True).start()
     mqtt.start(config.mqtt_host, config.mqtt_port, config.mqtt_username, config.mqtt_password)

@@ -8,6 +8,8 @@ from witch_bridge.core import Bridge, Topics, discovery_messages
 TOPICS = Topics()
 VIDEOS = {"witch1": "/videos/witch1.mp4", "witch2": "/videos/witch2.mp4", "ghost": "/videos/ghost.mp4"}
 NAMES = list(VIDEOS)
+HAPPY = "/videos/happy.mp4"
+LOOP_HAPPY = ("loadfile", HAPPY, "replace", -1, "loop-file=inf")
 
 
 class FirstChoice:
@@ -38,11 +40,19 @@ def choose():
 
 @pytest.fixture
 def bridge(mqtt, mpv, choose):
-    return Bridge(mqtt, mpv, TOPICS, VIDEOS, choose)
+    return Bridge(mqtt, mpv, TOPICS, VIDEOS, choose, idle_video=HAPPY)
 
 
 def idle_active(value):
     return {"event": "property-change", "id": 1, "name": "idle-active", "data": value}
+
+
+def path(value):
+    return {"event": "property-change", "id": 2, "name": "path", "data": value}
+
+
+def end_file(reason):
+    return {"event": "end-file", "reason": reason}
 
 
 @pytest.mark.parametrize(
@@ -90,22 +100,69 @@ def test_random_scare_with_no_videos_does_nothing(mqtt, mpv, choose):
     assert mpv.commands == []
 
 
-def test_mpv_connect_observes_idle_active(bridge, mpv):
+def test_mpv_connect_observes_idle_active_and_path(bridge, mpv):
     bridge.mpv_connected()
-    assert mpv.commands == [("observe_property", 1, "idle-active")]
+    assert mpv.commands == [("observe_property", 1, "idle-active"), ("observe_property", 2, "path")]
 
 
-@pytest.mark.parametrize("idle, expected", [(True, "OFF"), (False, "ON")])
-def test_idle_active_drives_playing(bridge, mqtt, idle, expected):
-    bridge.mpv_message(idle_active(idle))
+@pytest.mark.parametrize(
+    "current, expected",
+    [
+        ("/videos/witch1.mp4", "ON"),
+        ("/videos/ghost.mp4", "ON"),
+        (HAPPY, "OFF"),
+        (None, "OFF"),
+    ],
+)
+def test_only_a_scare_video_counts_as_playing(bridge, mqtt, current, expected):
+    bridge.mpv_message(path(current))
     assert mqtt.payloads_for(TOPICS.playing) == [expected]
+
+
+@pytest.mark.parametrize(
+    "messages, expected",
+    [
+        ([idle_active(True)], [LOOP_HAPPY]),
+        ([idle_active(False)], []),
+        # A happy.mp4 that fails to load would otherwise be retried every time mpv falls idle.
+        ([idle_active(True), end_file("error"), idle_active(True)], [LOOP_HAPPY]),
+        ([idle_active(True), end_file("eof"), idle_active(True)], [LOOP_HAPPY, LOOP_HAPPY]),
+    ],
+)
+def test_idle_mpv_loops_the_happy_video(bridge, mpv, messages, expected):
+    for message in messages:
+        bridge.mpv_message(message)
+    assert mpv.commands == expected
+
+
+def test_a_failed_scare_does_not_stop_the_happy_loop(bridge, mpv):
+    bridge.command("play:ghost")
+    for message in (end_file("error"), idle_active(True)):
+        bridge.mpv_message(message)
+    assert mpv.commands[-1] == LOOP_HAPPY
+
+
+def test_mpv_reconnect_retries_a_broken_happy_video(bridge, mpv):
+    for message in (idle_active(True), end_file("error")):
+        bridge.mpv_message(message)
+    bridge.mpv_disconnected()
+    bridge.mpv_connected()
+    bridge.mpv_message(idle_active(True))
+    assert mpv.commands[-1] == LOOP_HAPPY
+
+
+def test_without_an_idle_video_mpv_stays_black(mqtt, mpv, choose):
+    bridge = Bridge(mqtt, mpv, TOPICS, VIDEOS, choose)
+    bridge.mpv_message(idle_active(True))
+    assert mpv.commands == []
 
 
 @pytest.mark.parametrize(
     "message",
     [
         {"event": "property-change", "id": 2, "name": "pause", "data": True},
-        {"event": "end-file", "reason": "eof"},
+        end_file("eof"),
+        idle_active(False),
         {"request_id": 0, "error": "success"},
         {"request_id": 0, "error": "invalid parameter"},
     ],
@@ -131,13 +188,13 @@ def test_availability_follows_mpv_connection(bridge, mqtt, events, expected):
 
 
 def test_mqtt_reconnect_republishes_last_playing_state(bridge, mqtt):
-    bridge.mpv_message(idle_active(False))
+    bridge.mpv_message(path("/videos/witch1.mp4"))
     bridge.mqtt_connected()
     assert mqtt.payloads_for(TOPICS.playing) == ["ON", "ON"]
 
 
 def test_playing_is_not_published_once_mpv_is_lost(bridge, mqtt):
-    bridge.mpv_message(idle_active(False))
+    bridge.mpv_message(path("/videos/witch1.mp4"))
     bridge.mpv_disconnected()
     bridge.mqtt_connected()
     assert mqtt.payloads_for(TOPICS.playing) == ["ON"]
@@ -151,7 +208,7 @@ def test_mqtt_connect_publishes_every_discovery_config(bridge, mqtt):
 
 def test_everything_the_bridge_publishes_is_retained(bridge, mqtt):
     bridge.mpv_connected()
-    bridge.mpv_message(idle_active(False))
+    bridge.mpv_message(path("/videos/witch1.mp4"))
     bridge.mqtt_connected()
     assert all(retain for _, _, retain in mqtt.published)
 

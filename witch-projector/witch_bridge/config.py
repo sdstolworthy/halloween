@@ -22,6 +22,7 @@ class Config:
     mpv_socket: str = "/run/witch/mpv.sock"
     videos_dir: str = "/opt/witch/videos"
     videos: tuple[str, ...] = ()
+    idle_video: str | None = None
     discovery_prefix: str = "homeassistant"
 
     @classmethod
@@ -35,6 +36,13 @@ class Config:
         port = value("MQTT_PORT") or str(cls.mqtt_port)
         if not port.isdigit():
             raise ConfigError(f"MQTT_PORT must be a number, got {port!r}")
+        videos = parse_videos(value("WITCH_VIDEOS") or "")
+        idle_video = value("WITCH_IDLE_VIDEO")
+        if idle_video is not None and not VIDEO_NAME.fullmatch(idle_video):
+            raise ConfigError(f"WITCH_IDLE_VIDEO may only use letters, digits, _ and -, got {idle_video!r}")
+        # The idle loop must not count as a scare, or Playing would never turn off.
+        if idle_video in videos:
+            raise ConfigError(f"WITCH_IDLE_VIDEO {idle_video!r} is also listed in WITCH_VIDEOS")
         return cls(
             mqtt_host=host,
             mqtt_port=int(port),
@@ -42,12 +50,19 @@ class Config:
             mqtt_password=value("MQTT_PASSWORD"),
             mpv_socket=value("MPV_SOCKET") or cls.mpv_socket,
             videos_dir=value("WITCH_VIDEOS_DIR") or cls.videos_dir,
-            videos=parse_videos(value("WITCH_VIDEOS") or ""),
+            videos=videos,
+            idle_video=idle_video,
             discovery_prefix=value("DISCOVERY_PREFIX") or cls.discovery_prefix,
         )
 
     def video_paths(self) -> dict[str, str]:
-        return {name: posixpath.join(self.videos_dir, f"{name}.mp4") for name in self.videos}
+        return {name: self._path(name) for name in self.videos}
+
+    def idle_video_path(self) -> str | None:
+        return self._path(self.idle_video) if self.idle_video else None
+
+    def _path(self, name: str) -> str:
+        return posixpath.join(self.videos_dir, f"{name}.mp4")
 
 
 def parse_videos(raw: str) -> tuple[str, ...]:
