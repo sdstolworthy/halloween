@@ -35,10 +35,10 @@ g++ -std=c++17 -Wall -Wextra -o /tmp/shaker_test tests/shaker_test.cpp && /tmp/s
 
 ## Enclosure
 
-`python3 servo_enclosure.py` regenerates `servo_base.stl` and `servo_lid.stl` (deps in HANDOFF.md §5). It imports
+`uv run python servo_enclosure.py` regenerates `servo_base.stl` and `servo_lid.stl` (deps pinned in `uv.lock`). It imports
 shared helpers and dimensions from `skeleton_enclosure.py`, so keep both here.
 
 `v1-motor-drive/` holds the v1 gear-motor parts (crank arm and the larger L298N enclosure) for a garland over
 ~300 g. Regenerate those from inside that folder (both scripts write to the current directory):
-`cd v1-motor-drive && python3 ../skeleton_enclosure.py && python3 crank_arm.py`. The firmware here would need
+`cd v1-motor-drive && uv run python ../skeleton_enclosure.py && uv run python crank_arm.py`. The firmware here would need
 the v1 L298N outputs back (see git history before the servo change).

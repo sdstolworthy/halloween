@@ -76,8 +76,8 @@ Possible follow-ups: add the ±15° double-twitch "rattle" one move in four; a `
 ## 5. Enclosure (done, parametric)
 
 Files: `servo_enclosure.py` (imports helpers/shared constants from `skeleton_enclosure.py`; keep both in one folder),
-`servo_base.stl`, `servo_lid.stl`. Deps: `pip install trimesh manifold3d shapely mapbox_earcut numpy` (+ matplotlib
-for previews). `python3 servo_enclosure.py` regenerates both STLs (watertight).
+`servo_base.stl`, `servo_lid.stl`. Deps: declared in `pyproject.toml`, pinned in `uv.lock`.
+`uv run python servo_enclosure.py` regenerates both STLs (watertight).
 
 Geometry (mm; interior origin at the front-left floor corner; y=0 is the front/DC-jack wall; lid is +z):
 - Interior 96 x 64 x 28, walls/floor 2.4 → ~101 x 69 x 36 outside assembled.

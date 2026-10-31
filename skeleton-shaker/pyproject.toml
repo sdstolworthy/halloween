@@ -1,0 +1,15 @@
+[project]
+name = "skeleton-shaker-enclosure"
+version = "0.1.0"
+description = "Parametric STL generators for the skeleton shaker enclosure"
+requires-python = ">=3.11"
+dependencies = [
+    "mapbox-earcut",
+    "manifold3d",
+    "numpy",
+    "shapely",
+    "trimesh",
+]
+
+[tool.uv]
+package = false
