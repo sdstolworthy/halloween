@@ -1,0 +1,9 @@
+[Unit]
+Description=Reconnect the witch projector's Bluetooth speaker
+After=bluetooth.service bluealsa.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/witch/speaker.env
+# The leading - keeps a speaker that is switched off from marking the unit failed; the timer tries again.
+ExecStart=-/bin/sh -c 'bluetoothctl info "$WITCH_SPEAKER" | grep -q "Connected: yes" || bluetoothctl connect "$WITCH_SPEAKER"'

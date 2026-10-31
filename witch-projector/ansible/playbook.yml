@@ -2,9 +2,21 @@
   hosts: all
   become: true
   tasks:
-    - name: Install mpv and venv support
+    - name: Check the audio settings
+      ansible.builtin.assert:
+        that:
+          - witch_audio_output in witch_audio_devices
+          - witch_bluetooth_speaker == '' or witch_bluetooth_speaker is match('^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
+        fail_msg: >-
+          witch_audio_output must be one of {{ witch_audio_devices | list | join(', ') }}, and
+          witch_bluetooth_speaker empty or an address like AA:BB:CC:DD:EE:FF.
+        quiet: true
+
+    # BlueALSA rather than PipeWire: there is no desktop login session for a per-user sound server, and BlueALSA
+    # exposes the speaker as a plain ALSA device that the witch user (in the audio group) can open.
+    - name: Install mpv, venv support and Bluetooth audio
       ansible.builtin.apt:
-        name: [mpv, python3-venv]
+        name: [mpv, python3-venv, bluez, bluez-alsa-utils, libasound2-plugin-bluez]
         update_cache: true
         cache_valid_time: 3600
 
@@ -148,14 +160,40 @@
       notify: Restart witch-mpv
       tags: [systemd]
 
-    - name: Install the mpv unit
-      ansible.builtin.copy:
-        src: "{{ witch_source }}/systemd/witch-mpv.service"
-        dest: /etc/systemd/system/witch-mpv.service
+    - name: Write the mpv environment file
+      ansible.builtin.template:
+        src: mpv.env.j2
+        dest: /etc/witch/mpv.env
+        owner: root
+        group: witch
+        mode: "0640"
+      notify: Restart witch-mpv
+
+    - name: Write the Bluetooth speaker environment file
+      ansible.builtin.template:
+        src: speaker.env.j2
+        dest: /etc/witch/speaker.env
         owner: root
         group: root
         mode: "0644"
-      register: mpv_unit
+
+    - name: Start Bluetooth and BlueALSA
+      ansible.builtin.systemd:
+        name: "{{ item }}.service"
+        enabled: true
+        state: started
+      loop: [bluetooth, bluealsa]
+      tags: [systemd]
+
+    - name: Install the mpv and speaker units
+      ansible.builtin.copy:
+        src: "{{ witch_source }}/systemd/{{ item }}"
+        dest: /etc/systemd/system/{{ item }}
+        owner: root
+        group: root
+        mode: "0644"
+      loop: [witch-mpv.service, witch-speaker-reconnect.service, witch-speaker-reconnect.timer]
+      register: mpv_units
       notify: Restart witch-mpv
       tags: [systemd]
 
@@ -175,8 +213,15 @@
         name: "{{ item }}.service"
         enabled: true
         state: started
-        daemon_reload: "{{ mpv_unit is changed or bridge_unit is changed }}"
+        daemon_reload: "{{ mpv_units is changed or bridge_unit is changed }}"
       loop: [witch-mpv, witch-bridge]
+      tags: [systemd]
+
+    - name: Reconnect the speaker when one is set
+      ansible.builtin.systemd:
+        name: witch-speaker-reconnect.timer
+        enabled: "{{ witch_bluetooth_speaker != '' }}"
+        state: "{{ 'started' if witch_bluetooth_speaker != '' else 'stopped' }}"
       tags: [systemd]
 
     - name: Apply pending restarts before verifying

@@ -48,8 +48,22 @@ The playbook writes `/etc/witch/bridge.env` from `ansible/templates/bridge.env.j
 `apps/mosquitto/sealed-secrets.yaml`. To view or rotate the password, run
 `ansible-vault edit ansible/group_vars/all/vault.yml`, then re-add the user's hash to that passwordfile.
 
-Audio goes to HDMI 0 by default (`--audio-device` in `systemd/witch-mpv.service`; list devices with
-`mpv --audio-device=help`).
+### Sound
+
+`witch_audio_output` in `ansible/group_vars/all/vars.yml` picks where the sound goes: `hdmi` (default, through
+the projector), `jack` (the Pi's 3.5mm socket) or `bluetooth`. The playbook writes it to `/etc/witch/mpv.env`.
+
+For a Bluetooth speaker (BlueALSA, installed by the playbook):
+
+1. Put the speaker in pairing mode next to the Pi and run `./witch-projector/pair-speaker.sh` to list nearby
+   devices, then `./witch-projector/pair-speaker.sh AA:BB:CC:DD:EE:FF` to pair, trust and connect it.
+2. Set `witch_audio_output: bluetooth` and `witch_bluetooth_speaker: "AA:BB:CC:DD:EE:FF"`, then rerun
+   `install.sh`. With an address set, `witch-speaker-reconnect.timer` reconnects the speaker every 30 seconds if
+   it drops.
+
+mpv opens the audio device when a video starts. If the speaker was off at that moment, that video plays silently;
+the looping idle video stays silent until the next scare or `sudo systemctl restart witch-mpv`. Many speakers
+switch themselves off after a few minutes of silence, so leave the idle video's sound on.
 
 ## MQTT topics
 

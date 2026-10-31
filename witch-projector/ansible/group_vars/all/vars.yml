@@ -14,3 +14,15 @@ witch_idle_video: happy
 # install.sh sets WITCH_VIDEO_SRC_DIR from its argument; passing it through the environment avoids -e quoting
 # problems with paths that contain spaces.
 witch_video_src_dir: "{{ lookup('ansible.builtin.env', 'WITCH_VIDEO_SRC_DIR') }}"
+
+# Where the sound goes: hdmi (HDMI 0, through the projector), jack (the Pi's 3.5mm socket) or bluetooth (the
+# speaker paired with pair-speaker.sh). Override per run with ./install.sh ~ -e witch_audio_output=bluetooth.
+witch_audio_output: hdmi
+witch_audio_devices:
+  hdmi: alsa/default:CARD=vc4hdmi0
+  jack: alsa/default:CARD=Headphones
+  # BlueALSA's default PCM is the most recently connected Bluetooth device, so this needs no address.
+  bluetooth: alsa/bluealsa
+# The paired speaker's address (AA:BB:CC:DD:EE:FF). When set, a timer reconnects it every 30 s if it drops, e.g.
+# after the speaker goes to sleep and is switched back on.
+witch_bluetooth_speaker: ""
