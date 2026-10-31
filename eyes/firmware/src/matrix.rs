@@ -2,14 +2,14 @@
 //! `firmware/src/matrix.rs` (rev 2ebde02). The I2S/DMA driver refreshes the panel by itself in the
 //! background; we only write pixels and flip buffers.
 //!
-//! `new` walks [`MATRIX_LADDER`]: a double buffer gives tear-free flips, and when its ~2 x 64 KiB of
-//! DMA-capable RAM is not available it falls back to a single buffer with a loud warning. The eyes repaint
-//! every pixel each frame, so the fallback costs only a brief tear while a frame is drawn.
+//! `new` walks the single-buffer rungs of [`MATRIX_LADDER`]: on the ESP32-S3 the driver's
+//! double-buffer flip corrupts memory (see the comment in `new`), so double buffering is skipped
+//! outright. The eyes repaint every pixel each frame, so the cost is only a brief tear.
 
 use embedded_graphics::pixelcolor::Rgb888;
 use embedded_graphics::prelude::*;
 use eyes_hal::{select_matrix_config, Matrix, MatrixConfig, MATRIX_LADDER};
-use log::{info, warn};
+use log::info;
 
 /// HUB75 ribbon to GPIO mapping. `repr(C)`: passed by pointer to the shim's `hub75_pins_t`, which mirrors
 /// this field order exactly.
@@ -58,7 +58,17 @@ pub struct Hub75Matrix {
 
 impl Hub75Matrix {
     pub fn new(width: u32, height: u32, pins: Hub75Pins) -> anyhow::Result<Self> {
-        let config = select_matrix_config(&MATRIX_LADDER, |config| {
+        // On the ESP32-S3, the driver's double-buffer flip corrupts memory outside its own
+        // allocations (layout-dependent crashes: other tasks' stack canaries, wild jumps; seen on
+        // 3.0.11 and 3.0.14, and matching the maintainer's old note in issue #284 that double
+        // buffering on the S3 never worked). Single buffer is stable, and the eyes repaint every
+        // pixel each frame, so the cost is only a brief tear while a frame is drawn.
+        let ladder: Vec<MatrixConfig> = MATRIX_LADDER
+            .iter()
+            .copied()
+            .filter(|config| !config.double_buffer)
+            .collect();
+        let config = select_matrix_config(&ladder, |config| {
             info!(
                 "HUB75 init {width}x{height} double_buffer={} (largest free DMA block {} B)",
                 config.double_buffer,
@@ -78,7 +88,7 @@ impl Hub75Matrix {
         if config.double_buffer {
             info!("HUB75 up, double-buffered");
         } else {
-            warn!("HUB75 up SINGLE-buffered: the double buffer did not fit in DMA RAM; frames may briefly tear");
+            info!("HUB75 up, single-buffered (the S3's double-buffer flip corrupts memory; frames may briefly tear)");
         }
         Ok(Self {
             size: Size::new(width, height),

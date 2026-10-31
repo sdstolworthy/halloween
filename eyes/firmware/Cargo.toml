@@ -34,7 +34,7 @@ toml = "0.9"
 # HUB75 driver: mrcodetastic's ESP32-HUB75-MatrixPanel-DMA ESP-IDF component, from git because the
 # author stopped publishing to the component registry. Must match components/matrix_shim/idf_component.yml.
 [[package.metadata.esp-idf-sys.extra_components]]
-remote_component = { name = "mrcodetastic/esp32-hub75-matrixpanel-i2s-dma", version = "3.0.11", git = "https://github.com/mrcodetastic/ESP32-HUB75-MatrixPanel-DMA.git" }
+remote_component = { name = "mrcodetastic/esp32-hub75-matrixpanel-i2s-dma", version = "3.0.14", git = "https://github.com/mrcodetastic/ESP32-HUB75-MatrixPanel-DMA.git" }
 
 # The C shim matrix.rs calls over FFI. A local path dependency (not `component_dirs`) so the generated
 # `main` component REQUIRES it and the linker keeps its archive.

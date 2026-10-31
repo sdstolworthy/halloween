@@ -1,6 +1,6 @@
 # eyes
 
-A pair of eyes on a 128x64 HUB75 LED panel (ESP32-WROOM-32) that watch visitors walk up the path, using
+A pair of eyes on a 128x64 HUB75 LED panel (ESP32-S3) that watch visitors walk up the path, using
 porch-sensor's distance over MQTT. The browser emulator runs the same renderer, so it shows the exact
 pixels the panel will. Design and contracts: [the tracking eyes spec](../docs/specs/2026-10-20-tracking-eyes-design.md).
 
@@ -76,26 +76,17 @@ eyes still run, idle and offline. The first build compiles ESP-IDF v5.3.3 into `
 
 ### Wiring
 
-The HUB75 map is flight-rs's WROOM-32 wiring (`firmware/src/board.rs` is authoritative). Use the panel's
-**input** connector. On the 2x8 ribbon, position = pin number counted from the red-striped (pin 1) edge;
-rainbow wire colours repeat after 10, so count positions rather than trusting colours.
+The active board is the **Adafruit MatrixPortal S3** (product 5778): the HUB75 socket is hardwired on
+the board, so the panel's **input** connector plugs straight onto it — no ribbon hand-wiring. The GPIO
+map in `firmware/src/board.rs` mirrors Adafruit's routing (verified against the CircuitPython board
+definition) and must not be edited to chase image problems; the copper decides. The original hand-wired
+WROOM-32 map is kept in `board.rs` for reverting to a DevKit.
 
-| Pin | Signal | GPIO | Pin | Signal | GPIO |
-| --- | --- | --- | --- | --- | --- |
-| 1 | R1 | 25 | 9 | A | 23 |
-| 2 | G1 | 26 | 10 | B | 19 |
-| 3 | B1 | 27 | 11 | C | 5 |
-| 4 | GND | GND | 12 | D | 17 |
-| 5 | R2 | 14 | 13 | CLK | 16 |
-| 6 | G2 | 12 | 14 | LAT (STB) | 4 |
-| 7 | B2 | 13 | 15 | OE (BLANK) | 15 |
-| 8 | E | 32 | 16 | GND | GND |
-
-- **Pin 8 must be E (GPIO32)**: a 128x64 panel is 1/32 scan and needs it. Wrong here shows mirrored or
-  repeated halves.
-- **GPIO12 (G2) is a strapping pin** that sets the flash voltage and must be low at reset. If the board
-  won't boot or flash with the panel attached, unplug the ribbon to confirm. GPIO5 and GPIO15 are also
-  strapping pins, but their defaults are compatible with normal boot.
+- A 128x64 panel is 1/32 scan and needs the E address line; the MatrixPortal S3 routes it (GPIO21) to
+  the socket, but on some panels the input connector's E position is jumpered — if the image shows
+  mirrored or repeated halves, check the panel's E jumper/solder pad.
+- Plug the board into the panel's **input** (IN) socket, not OUT; the arrow silkscreen points from IN
+  to OUT.
 - Check pin 1's orientation before powering up; a reversed ribbon swaps every signal. A wrong signal wire
   only garbles the image.
 - **Never** connect the panel's 5 V to the ESP32's 3V3. Power the panel from its own 5 V supply (a 128x64

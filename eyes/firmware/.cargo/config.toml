@@ -1,7 +1,7 @@
 [build]
-target = "xtensa-esp32-espidf"
+target = "xtensa-esp32s3-espidf"
 
-[target.xtensa-esp32-espidf]
+[target.xtensa-esp32s3-espidf]
 linker = "ldproxy"
 # --partition-table is required, or espflash writes its own single-app table. Run from firmware/.
 runner = "espflash flash --monitor --partition-table partitions.csv"

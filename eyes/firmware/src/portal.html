@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Eyes Bench</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font: 16px/1.5 system-ui, sans-serif; background: #14101c; color: #eee;
+         max-width: 420px; margin: 2rem auto; padding: 0 16px; }
+  h1 { font-size: 1.2rem; color: #ff9b3d; }
+  fieldset { border: 1px solid #443a5c; border-radius: 8px; margin: 0 0 1rem; padding: 12px; }
+  legend { padding: 0 6px; color: #b9a7e0; }
+  input[type=range] { width: 100%; }
+  .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+  output { font-variant-numeric: tabular-nums; }
+  button { background: #2a2140; color: #eee; border: 1px solid #443a5c; border-radius: 8px;
+           padding: 8px 18px; font-size: 1rem; }
+  button.active { background: #ff9b3d; color: #14101c; border-color: #ff9b3d; }
+  #net { color: #888; font-size: .85rem; min-height: 1.2em; }
+</style>
+</head>
+<body>
+<h1>Porch eyes &mdash; bench portal</h1>
+
+<fieldset>
+  <legend>Sensor</legend>
+  <div class="row">
+    <label><input type="checkbox" id="online" checked> Sensor online (10 Hz)</label>
+    <output id="reading">2.50 m</output>
+  </div>
+  <input type="range" id="dist" min="0.3" max="4.5" step="0.01" value="2.5">
+  <div class="row"><span>0.3 m (at the door)</span><span>4.5 m (none)</span></div>
+</fieldset>
+
+<fieldset>
+  <legend>Mode</legend>
+  <div class="row">
+    <button id="normal" class="active">Normal</button>
+    <button id="evil">Evil</button>
+  </div>
+</fieldset>
+
+<p id="net"></p>
+
+<script>
+  const dist = document.getElementById('dist');
+  const online = document.getElementById('online');
+  const reading = document.getElementById('reading');
+  const net = document.getElementById('net');
+
+  // porch-sensor's exact payloads: two decimals, or "none" at and beyond 4.5 m.
+  function payload() {
+    const v = parseFloat(dist.value);
+    return v >= 4.5 ? 'none' : v.toFixed(2);
+  }
+  function show() {
+    const p = payload();
+    reading.textContent = p === 'none' ? 'none' : p + ' m';
+  }
+  dist.addEventListener('input', show);
+  show();
+
+  let failures = 0;
+  async function post(path, body) {
+    try {
+      await fetch(path, { method: 'POST', body });
+      failures = 0;
+      net.textContent = '';
+    } catch (e) {
+      if (++failures === 3) net.textContent = 'device not responding';
+    }
+  }
+
+  setInterval(() => { if (online.checked) post('/simulate/distance', payload()); }, 100);
+
+  for (const mode of ['normal', 'evil']) {
+    const button = document.getElementById(mode);
+    button.addEventListener('click', () => {
+      document.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+      button.classList.add('active');
+      post('/simulate/mode', mode);
+    });
+  }
+</script>
+</body>
+</html>

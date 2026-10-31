@@ -1,4 +1,4 @@
-//! Porch eyes firmware: ESP32-WROOM-32 driving a 128x64 HUB75 panel.
+//! Porch eyes firmware: Adafruit MatrixPortal S3 driving a 128x64 HUB75 panel (see board.rs).
 //!
 //! All behaviour lives in the host-tested crates: `eyes-core` (geometry, state machine), `eyes-render`
 //! (pixels) and `eyes-hal` (the frame loop). This crate only supplies the board: the HUB75 matrix, a
@@ -8,6 +8,7 @@ mod board;
 mod clock;
 mod matrix;
 mod net;
+mod portal;
 mod provision;
 
 use std::time::{Duration, Instant};
@@ -19,7 +20,7 @@ use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use eyes_core::layout::{PANEL_HEIGHT, PANEL_WIDTH};
 use eyes_core::SplitMix64;
 use eyes_hal::App;
-use log::{error, info};
+use log::{error, info, warn};
 
 use crate::clock::EspClock;
 use crate::matrix::Hub75Matrix;
@@ -37,6 +38,10 @@ const STATS_PERIOD: Duration = Duration::from_secs(30);
 const MIN_SLEEP: Duration = Duration::from_millis(1);
 /// Long enough to read the reason on the serial console, short enough to recover by itself.
 const RESTART_DELAY: Duration = Duration::from_secs(10);
+/// Covers a normal Wi-Fi join (a few seconds); on timeout the matrix starts anyway.
+const JOIN_TIMEOUT: Duration = Duration::from_secs(15);
+/// Margin after the join before the first frame, clear of the join's trailing bursts.
+const JOIN_SETTLE: Duration = Duration::from_secs(1);
 
 fn main() -> anyhow::Result<()> {
     esp_idf_svc::sys::link_patches();
@@ -48,14 +53,25 @@ fn main() -> anyhow::Result<()> {
     let nvs = EspDefaultNvsPartition::take()?;
     let provisioning = Provisioning::baked();
 
-    // The matrix first, while internal RAM is still one unfragmented region: the DMA framebuffers are the
-    // largest allocations on the board.
-    let matrix = match Hub75Matrix::new(PANEL_WIDTH, PANEL_HEIGHT, board::WROOM32_PINS) {
+    // Network first, matrix only after the Wi-Fi join (or a timeout): painting the panel while the
+    // Wi-Fi driver initialises corrupts memory on the MatrixPortal S3 — layout-dependent crashes
+    // that surfaced when the bench portal shifted the binary. Single-buffer mode (see matrix.rs)
+    // and this ordering are the two halves of the fix; the soak-tested recipe is both together.
+    let (inbox, joined) = net::start(peripherals.modem, sysloop, nvs, &provisioning);
+    let waited = Instant::now();
+    while !joined.load(std::sync::atomic::Ordering::Acquire) {
+        if waited.elapsed() >= JOIN_TIMEOUT {
+            warn!("no Wi-Fi join after {JOIN_TIMEOUT:?}; bringing the matrix up anyway");
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::thread::sleep(JOIN_SETTLE);
+    let matrix = match Hub75Matrix::new(PANEL_WIDTH, PANEL_HEIGHT, board::MATRIX_PORTAL_S3_PINS) {
         Ok(matrix) => matrix,
         Err(reason) => restart_after(RESTART_DELAY, &reason),
     };
     log_heap("after HUB75");
-    let inbox = net::start(peripherals.modem, sysloop, nvs, &provisioning);
 
     let mut app = App::new(
         matrix,

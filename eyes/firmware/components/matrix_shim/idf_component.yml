@@ -13,4 +13,4 @@ dependencies:
   idf: ">=5.1"
   mrcodetastic/esp32-hub75-matrixpanel-i2s-dma:
     git: https://github.com/mrcodetastic/ESP32-HUB75-MatrixPanel-DMA.git
-    version: "3.0.11"
+    version: "3.0.14"

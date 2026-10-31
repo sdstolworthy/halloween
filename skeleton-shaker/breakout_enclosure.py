@@ -3,9 +3,9 @@ Enclosure v3 for the servo skeleton shaker: ESP32 on a screw-terminal breakout b
 
 Holds: 77 x 63 mm breakout board (holes on a 72 x 57 mm pattern, M3) with the ESP32 seated on
 top (21 mm stack), LM2596 buck module (5 V rail -> 3V3 to the breakout), two WAGO 221-415 lever
-nuts (5 V rail, GND rail), a panel-mount 5.5 x 2.1 mm DC jack in the front wall, and the MG90S
-servo nose-mounted through the right wall so the horn sweeps outside (its own screws, pilot
-holes through the wall; a pedestal under the body takes the torque). 4x M3 lid screws, two
+nuts (5 V rail, GND rail), a panel-mount 5.5 x 2.1 mm DC jack in the front wall, and the DS3218
+servo nose-mounted through the right wall so the horn sweeps outside (M3 through-bolts and nuts
+on the standard flange pattern; a pedestal under the body takes the torque). 4x M3 lid screws, two
 mounting ears on the front/back walls. No cable glands: the only moving linkage is the horn.
 
 Reuses the helpers and shared dimensions from skeleton_enclosure.py (same folder).
@@ -30,13 +30,16 @@ BUCK_L, BUCK_W, BUCK_X0, BUCK_Y0, BUCK_CLR, BUCK_POST_H = 43.2, 20.7, 85.0, 19.0
 # WAGO cradle against the back wall, right of the breakout.
 WAGO_X0 = 85.0
 
-# MG90S through the right wall (x = W): nose + shaft out, tabs against the inner face, fixed by
-# the servo's own screws through wall pilot holes. Cross-section facing the wall: 22.9 x 12.2.
-SRV_CY, SRV_CZ = 30.0, 16.0
-SRV_CUT_W, SRV_CUT_H = 23.3, 12.6      # body 22.9 x 12.2 + clearance
-SRV_SCREW_DY, SRV_PILOT_R = 13.9, 0.8  # tab holes 27.8 mm apart; pilots for the ~2.2 mm screws
-SRV_BODY_IN = 24.0                     # body reach inward from the inner wall face
-PED_W = 20.0                           # pedestal under the body takes the horn torque
+# DS3218 (standard size) through the right wall (x = W): nose + shaft out, flange against the
+# inner face, M3 bolts from outside through the wall and flange with nuts inside (a 20 kg-cm servo
+# would strip self-tappers in a 2.4 mm wall). Cross-section facing the wall: 40 x 20. The mount
+# sits higher up the wall than the MG90S did so the body clears the DC jack's inward reach.
+SRV_CY, SRV_CZ = 38.5, 16.0
+SRV_CUT_W, SRV_CUT_H = 40.6, 20.6          # body 40 x 20 + clearance
+SRV_SCREW_DY, SRV_SCREW_DZ = 24.75, 5.0    # standard 49.5 x 10 mm flange hole pattern
+SRV_SCREW_R = 1.6                          # M3 clearance
+SRV_BODY_IN = 31.0                         # flange-to-bottom reach inward from the inner wall face
+PED_W = 30.0                               # pedestal under the body takes the horn torque
 
 JACK_X, JACK_Z, JACK_R = 120.0, 15.0, 6.1   # panel-mount DC jack, 12 mm hole, front wall
 
@@ -62,8 +65,9 @@ def build_base():
     adds += [box(x, x + WAGO_WALL, inner_y0, D, 0, WAGO_WALL_H) for x in xs]
     adds += [box(WAGO_X0, xs[2] + WAGO_WALL, inner_y0 - WAGO_WALL, inner_y0, 0, WAGO_LIP_H)]
 
-    # servo pedestal: top at the body's underside (z = SRV_CZ - 6.1 - 0.1)
-    adds += [box(W - SRV_BODY_IN, W - 2.0, SRV_CY - PED_W / 2, SRV_CY + PED_W / 2, 0, SRV_CZ - 6.2)]
+    # servo pedestal: top at the body's underside
+    adds += [box(W - SRV_BODY_IN, W - 2.0, SRV_CY - PED_W / 2, SRV_CY + PED_W / 2, 0,
+                 SRV_CZ - SRV_CUT_H / 2 - 0.1)]
 
     # mounting ears, front/back walls
     adds += [box(W / 2 - EAR_W / 2, W / 2 + EAR_W / 2, -T - EAR_L, -T, -T, -T + EAR_T),
@@ -73,11 +77,11 @@ def build_base():
     cuts = [cyl_z(x, y, H - BOSS_HOLE_DEPTH, H + 1, BOSS_HOLE_R) for x, y in BOSS_XY]
     cuts += [cyl_z(x, y, 0.6, STAND_H + 1, STAND_HOLE_R) for x, y in stand_xy]
     cuts += [cyl_y(JACK_X, JACK_Z, -T - 1, 1.0, JACK_R)]
-    # servo: body cutout and screw pilots through the right wall
+    # servo: body cutout and four M3 bolt holes through the right wall
     cuts += [box(W - 1.0, W + T + 1, SRV_CY - SRV_CUT_W / 2, SRV_CY + SRV_CUT_W / 2,
                  SRV_CZ - SRV_CUT_H / 2, SRV_CZ + SRV_CUT_H / 2)]
-    cuts += [cyl_x(SRV_CY - SRV_SCREW_DY, SRV_CZ, W - 1.0, W + T + 1, SRV_PILOT_R),
-             cyl_x(SRV_CY + SRV_SCREW_DY, SRV_CZ, W - 1.0, W + T + 1, SRV_PILOT_R)]
+    cuts += [cyl_x(SRV_CY + sy * SRV_SCREW_DY, SRV_CZ + sz * SRV_SCREW_DZ, W - 1.0, W + T + 1, SRV_SCREW_R)
+             for sy in (-1, 1) for sz in (-1, 1)]
     cuts += [cyl_z(W / 2, -T - EAR_L / 2, -T - 1, 1, EAR_HOLE_R),
              cyl_z(W / 2, D + T + EAR_L / 2, -T - 1, 1, EAR_HOLE_R)]
     return diff(base, cuts)

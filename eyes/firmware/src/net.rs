@@ -7,6 +7,7 @@
 
 use std::convert::Infallible;
 use std::ffi::CStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -36,13 +37,14 @@ const MQTT_BUFFER_BYTES: usize = 1024;
 const CLIENT_ID: &str = "halloween-eyes";
 const LINK_CHECK_PERIOD: Duration = Duration::from_secs(2);
 const RETRY_BACKOFF: (Duration, Duration) = (Duration::from_secs(2), Duration::from_secs(60));
-/// flight-rs brought Wi-Fi up on a 16 KiB main stack; 12 KiB without TLS, and the high-water mark is
-/// logged so a bench run shows the real margin.
-const NET_STACK_BYTES: usize = 12 * 1024;
+/// flight-rs brought Wi-Fi up on a 16 KiB main stack; this thread also registers the bench
+/// portal's httpd handlers, so it gets the full 16 KiB. The high-water mark is logged so a bench
+/// run shows the real margin.
+const NET_STACK_BYTES: usize = 16 * 1024;
 const NET_THREAD_NAME: &CStr = c"net";
 const STACK_REPORT_PERIOD: Duration = Duration::from_secs(300);
 
-type SharedMailbox = Arc<Mutex<Mailbox>>;
+pub(crate) type SharedMailbox = Arc<Mutex<Mailbox>>;
 
 pub struct SharedInbox(SharedMailbox);
 
@@ -54,24 +56,32 @@ impl Inbox for SharedInbox {
 
 /// A panic elsewhere while holding the lock must not take the eyes down with it; the mailbox is always
 /// left consistent, so carry on with its contents.
-fn lock(mailbox: &SharedMailbox) -> MutexGuard<'_, Mailbox> {
+pub(crate) fn lock(mailbox: &SharedMailbox) -> MutexGuard<'_, Mailbox> {
     mailbox
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Start the network thread and return the inbox it feeds. Never fails: on any problem the inbox simply
-/// stays empty and the eyes idle.
+/// Start the network thread; returns the inbox it feeds and a flag that turns true at the first
+/// Wi-Fi join (or immediately when the network never starts). Never fails: on any problem the
+/// inbox simply stays empty and the eyes idle.
+///
+/// The flag exists for init ordering: painting the HUB75 panel while the Wi-Fi driver initialises
+/// corrupts memory on the MatrixPortal S3 (layout-dependent wild-jump crashes), so main waits for
+/// the join before bringing the matrix up. A plain atomic, not an mpsc channel: the std channel's
+/// send crashed on this platform (LoadProhibited inside std::sync::mpmc on the esp Rust fork).
 pub fn start(
     modem: Modem<'static>,
     sysloop: EspSystemEventLoop,
     nvs: EspDefaultNvsPartition,
     provisioning: &Provisioning,
-) -> SharedInbox {
+) -> (SharedInbox, Arc<AtomicBool>) {
     let mailbox: SharedMailbox = Arc::new(Mutex::new(Mailbox::new(DISTANCE_QUEUE)));
+    let joined = Arc::new(AtomicBool::new(false));
     let Some(wifi) = provisioning.wifi else {
         warn!("no Wi-Fi credentials provisioned; running offline");
-        return SharedInbox(mailbox);
+        joined.store(true, Ordering::Release);
+        return (SharedInbox(mailbox), joined);
     };
     let mqtt = provisioning.mqtt;
     let thread_mailbox = mailbox.clone();
@@ -84,16 +94,36 @@ pub fn start(
     if let Err(reason) = pinned.set() {
         warn!("could not pin the network thread to core 0: {reason}");
     }
+    let thread_joined = joined.clone();
     let spawned = thread::Builder::new()
         .stack_size(NET_STACK_BYTES)
-        .spawn(move || supervise(modem, sysloop, nvs, wifi, mqtt, thread_mailbox));
+        .spawn(move || {
+            supervise(
+                modem,
+                sysloop,
+                nvs,
+                wifi,
+                mqtt,
+                thread_mailbox,
+                thread_joined,
+            )
+        });
     if let Err(reason) = ThreadSpawnConfiguration::default().set() {
         warn!("could not restore the default thread configuration: {reason}");
     }
     if let Err(reason) = spawned {
         error!("could not start the network thread: {reason}; running offline");
+        joined.store(true, Ordering::Release);
     }
-    SharedInbox(mailbox)
+    (SharedInbox(mailbox), joined)
+}
+
+/// What outlives each network rebuild: the bench portal (httpd sits on lwIP, which stays up
+/// across Wi-Fi teardowns, so it is started once after the first join) and the joined flag that
+/// gates main's matrix bring-up.
+struct Persistent {
+    portal: Option<esp_idf_svc::http::server::EspHttpServer<'static>>,
+    joined: Arc<AtomicBool>,
 }
 
 /// Runs the network forever, rebuilding it from scratch whenever it fails.
@@ -104,8 +134,13 @@ fn supervise(
     wifi: WifiCredentials,
     mqtt: Option<MqttSettings>,
     mailbox: SharedMailbox,
+    joined: Arc<AtomicBool>,
 ) {
     let mut backoff = RETRY_BACKOFF.0;
+    let mut persistent = Persistent {
+        portal: None,
+        joined,
+    };
     loop {
         // SAFETY: each attempt's Wi-Fi driver is dropped when `run` returns, before the next reborrow,
         // so the modem is never driven twice at once.
@@ -117,6 +152,7 @@ fn supervise(
             &wifi,
             mqtt.as_ref(),
             &mailbox,
+            &mut persistent,
         );
         error!(
             "network failed ({reason:?}); rebuilding it in {}s",
@@ -134,6 +170,7 @@ fn run(
     credentials: &WifiCredentials,
     mqtt: Option<&MqttSettings>,
     mailbox: &SharedMailbox,
+    persistent: &mut Persistent,
 ) -> anyhow::Result<Infallible> {
     let mut wifi = BlockingWifi::wrap(EspWifi::new(modem, sysloop.clone(), Some(nvs))?, sysloop)?;
     wifi.set_configuration(&Configuration::Client(station_config(credentials)?))?;
@@ -165,6 +202,17 @@ fn run(
                 Ok(()) => {
                     info!("joined Wi-Fi '{}'", credentials.ssid);
                     backoff = RETRY_BACKOFF.0;
+                    persistent.joined.store(true, Ordering::Release);
+                    // lwIP is guaranteed up here; starting httpd any earlier (from main) raced
+                    // Wi-Fi driver creation and aborted in lwIP.
+                    if persistent.portal.is_none() {
+                        match crate::portal::start(mailbox.clone()) {
+                            Ok(server) => persistent.portal = Some(server),
+                            Err(reason) => {
+                                warn!("bench portal failed to start ({reason}); continuing without it")
+                            }
+                        }
+                    }
                 }
                 Err(reason) => {
                     warn!(
