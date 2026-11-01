@@ -48,6 +48,13 @@ The playbook writes `/etc/witch/bridge.env` from `ansible/templates/bridge.env.j
 `apps/mosquitto/sealed-secrets.yaml`. To view or rotate the password, run
 `ansible-vault edit ansible/group_vars/all/vault.yml`, then re-add the user's hash to that passwordfile.
 
+### Rotation
+
+The projector lies on its side so the picture fills more of the door, so mpv turns every video 90 degrees
+counter-clockwise. `witch_video_rotation` in `ansible/group_vars/all/vars.yml` sets this as a clockwise angle
+(`270` now, `0` for a projector standing upright); the playbook writes it to `/etc/witch/mpv.env`. If the picture
+comes out upside down, the projector is on its other side: use `90`.
+
 ### Sound
 
 `witch_audio_output` in `ansible/group_vars/all/vars.yml` picks where the sound goes: `hdmi` (default, through

@@ -12,6 +12,12 @@
           witch_bluetooth_speaker empty or an address like AA:BB:CC:DD:EE:FF.
         quiet: true
 
+    - name: Check the video rotation
+      ansible.builtin.assert:
+        that: witch_video_rotation | int in [0, 90, 180, 270]
+        fail_msg: witch_video_rotation must be 0, 90, 180 or 270, got {{ witch_video_rotation }}.
+        quiet: true
+
     # BlueALSA rather than PipeWire: there is no desktop login session for a per-user sound server, and BlueALSA
     # exposes the speaker as a plain ALSA device that the witch user (in the audio group) can open.
     - name: Install mpv, venv support and Bluetooth audio

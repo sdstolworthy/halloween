@@ -13,7 +13,8 @@ CacheDirectory=witch
 Environment=XDG_CACHE_HOME=/var/cache/witch
 # No desktop session: mpv renders straight to the HDMI output through DRM/KMS. The idle window background is
 # black by default, and --osc=no keeps mpv's logo off the idle screen. The playbook writes WITCH_AUDIO_DEVICE
-# from witch_audio_output in group_vars (list choices with `mpv --audio-device=help`).
+# from witch_audio_output in group_vars (list choices with `mpv --audio-device=help`) and WITCH_VIDEO_ROTATE
+# from witch_video_rotation.
 EnvironmentFile=/etc/witch/mpv.env
 ExecStart=/usr/bin/mpv \
     --idle=yes \
@@ -28,6 +29,7 @@ ExecStart=/usr/bin/mpv \
     --vo=gpu \
     --gpu-context=drm \
     --hwdec=auto-safe \
+    --video-rotate=${WITCH_VIDEO_ROTATE} \
     --audio-device=${WITCH_AUDIO_DEVICE} \
     --input-ipc-server=/run/witch/mpv.sock
 Restart=always
