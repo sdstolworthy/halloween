@@ -51,9 +51,9 @@ The playbook writes `/etc/witch/bridge.env` from `ansible/templates/bridge.env.j
 ### Rotation
 
 The projector lies on its side so the picture fills more of the door, so mpv turns every video 90 degrees
-counter-clockwise. `witch_video_rotation` in `ansible/group_vars/all/vars.yml` sets this as a clockwise angle
-(`270` now, `0` for a projector standing upright); the playbook writes it to `/etc/witch/mpv.env`. If the picture
-comes out upside down, the projector is on its other side: use `90`.
+clockwise. `witch_video_rotation` in `ansible/group_vars/all/vars.yml` sets this as a clockwise angle (`90` now,
+`0` for a projector standing upright); the playbook writes it to `/etc/witch/mpv.env`. If the picture comes out
+upside down, the projector is on its other side: use `270`.
 
 ### Sound
 

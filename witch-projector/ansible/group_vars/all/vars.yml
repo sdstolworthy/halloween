@@ -27,6 +27,6 @@ witch_audio_devices:
 # after the speaker goes to sleep and is switched back on.
 witch_bluetooth_speaker: ""
 
-# Clockwise rotation in degrees (0, 90, 180 or 270) applied by mpv to every video. 270 turns them 90 degrees
-# counter-clockwise to match the projector lying on its side, so the picture fills more of the door.
-witch_video_rotation: 270
+# Clockwise rotation in degrees (0, 90, 180 or 270) applied by mpv to every video. 90 matches the projector
+# lying on its side, so the picture fills more of the door.
+witch_video_rotation: 90
